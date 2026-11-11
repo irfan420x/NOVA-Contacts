@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
+import androidx.activity.compose.BackHandler
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -160,6 +161,18 @@ fun NovaContactsApp() {
 
     NovaTheme(darkTheme = darkTheme) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            // System back button: step back to the list instead of exiting the app.
+            when (val s = screen) {
+                is ContactsScreen.ErrorLog, is ContactsScreen.Duplicates, is ContactsScreen.Detail -> {
+                    BackHandler { screen = ContactsScreen.List }
+                }
+                is ContactsScreen.Editor -> {
+                    BackHandler {
+                        screen = if (s.contact == null) ContactsScreen.List else ContactsScreen.Detail(s.contact)
+                    }
+                }
+                else -> {}
+            }
             when (val s = screen) {
                 is ContactsScreen.ErrorLog -> ErrorLogScreen(onBack = { screen = ContactsScreen.List })
                 is ContactsScreen.Duplicates -> DuplicatesScreen(
