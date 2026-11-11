@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -28,7 +29,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import androidx.fragment.app.FragmentActivity
 import coil.compose.AsyncImage
 import com.nova.contacts.data.ContactUtils
 import com.nova.contacts.data.ContactsRepo
@@ -54,7 +54,7 @@ private val REQUIRED_PERMISSIONS = arrayOf(
     Manifest.permission.WRITE_CONTACTS
 )
 
-class MainActivity : FragmentActivity() {
+class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()

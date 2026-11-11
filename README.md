@@ -51,6 +51,10 @@ Minimum SDK 29 (Android 10), target SDK 35.
 
 ## Version history
 
+- **v1.1** — Permission-crash fix: the Activity Result API always generates a
+  permission request code of 65536 or higher, and `FragmentActivity` rejects
+  any code above the lower 16 bits — so tapping "Allow access" always
+  crashed. `MainActivity` now extends `ComponentActivity`.
 - **v1.0** — Letter-section list, favorites, search + T9, in-app editor,
   details, duplicate finder + merge, vCard import/export, themes, Error log.
 
