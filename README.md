@@ -51,6 +51,11 @@ Minimum SDK 29 (Android 10), target SDK 35.
 
 ## Version history
 
+- **v1.3** — Full audit fix (data loss): editing a contact deleted EVERY
+  detail row except the name — silently destroying the contact's photo,
+  group memberships, websites and other data. Only the rows this editor
+  manages (phones, emails, organisation, note) are now replaced. Also:
+  vCard export skips nameless rows, which produced broken entries.
 - **v1.2** — The system back button now steps back to the contact list
   from details, editor, duplicates or the error log, instead of exiting
   the app.

@@ -198,14 +198,21 @@ object ContactsRepo {
         return try {
             val rawId = rawContactId(context, contactId) ?: return false
             val ops = ArrayList<ContentProviderOperation>()
-            // Drop every detail row except the name, then re-insert from the draft.
+            // v1.3: only replace the detail rows this editor manages (phones,
+            // emails, organisation, note). The old code deleted EVERY row
+            // except the name — silently destroying the contact's photo,
+            // group memberships, websites and other data on every edit.
+            val managed = listOf(
+                ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE,
+                ContactsContract.CommonDataKinds.Email.CONTENT_ITEM_TYPE,
+                ContactsContract.CommonDataKinds.Organization.CONTENT_ITEM_TYPE,
+                ContactsContract.CommonDataKinds.Note.CONTENT_ITEM_TYPE
+            )
+            val placeholders = managed.joinToString(",") { "?" }
             ops += ContentProviderOperation.newDelete(ContactsContract.Data.CONTENT_URI)
                 .withSelection(
-                    "${ContactsContract.Data.CONTACT_ID} = ? AND ${ContactsContract.Data.MIMETYPE} != ?",
-                    arrayOf(
-                        contactId.toString(),
-                        ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE
-                    )
+                    "${ContactsContract.Data.CONTACT_ID} = ? AND ${ContactsContract.Data.MIMETYPE} IN ($placeholders)",
+                    arrayOf(contactId.toString()) + managed.toTypedArray()
                 ).build()
             // Update the name row (insert one if the contact somehow has none).
             val nameUpdated = updateNameRow(context, contactId, name)
@@ -300,7 +307,8 @@ object ContactsRepo {
     // ---------- vCard backup ----------
 
     fun exportVCard(context: Context): String {
-        val contacts = loadAll(context).map { c ->
+        // v1.3: skip nameless rows (they produce broken vCard entries).
+        val contacts = loadAll(context).filter { it.displayName.isNotBlank() }.map { c ->
             VCard.VCardContact(
                 name = c.displayName,
                 phones = c.phones.map { it.number },
