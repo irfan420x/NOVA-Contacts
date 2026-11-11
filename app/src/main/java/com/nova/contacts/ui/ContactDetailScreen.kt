@@ -23,7 +23,9 @@ import com.nova.contacts.data.ContactsRepo
 import com.nova.contacts.data.ErrorLog
 import com.nova.contacts.data.FullContact
 import com.nova.contacts.data.VCard
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -37,6 +39,30 @@ fun ContactDetailScreen(
     val scope = rememberCoroutineScope()
     var starred by remember(contact) { mutableStateOf(contact.starred) }
     var confirmDelete by remember { mutableStateOf(false) }
+
+    // v1.4: recent calls with this contact (needs the call-log permission,
+    // requested here on demand — the app works without it).
+    var callLogGranted by remember { mutableStateOf(ContactsRepo.hasCallLogPermission(context)) }
+    var callHistory by remember { mutableStateOf<List<ContactsRepo.CallHistoryItem>>(emptyList()) }
+    val callLogLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        callLogGranted = granted
+        if (granted) {
+            scope.launch {
+                callHistory = withContext(Dispatchers.IO) {
+                    ContactsRepo.loadCallHistory(context, contact.phones.map { it.number })
+                }
+            }
+        }
+    }
+    LaunchedEffect(contact.contactId) {
+        if (callLogGranted) {
+            callHistory = withContext(Dispatchers.IO) {
+                ContactsRepo.loadCallHistory(context, contact.phones.map { it.number })
+            }
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -158,6 +184,44 @@ fun ContactDetailScreen(
                 contact.note?.takeIf { it.isNotBlank() }?.let {
                     Text("Note", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                     Text(it, modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(8.dp))
+                }
+                // v1.4: recent calls with this contact.
+                if (contact.phones.isNotEmpty()) {
+                    Text("Recent calls", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                    if (!callLogGranted) {
+                        OutlinedButton(
+                            onClick = { callLogLauncher.launch(android.Manifest.permission.READ_CALL_LOG) },
+                            modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+                        ) { Text("Show call history") }
+                    } else if (callHistory.isEmpty()) {
+                        Text(
+                            "No recent calls with this contact.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    } else {
+                        callHistory.forEach { h ->
+                            val typeLabel = when (h.type) {
+                                android.provider.CallLog.Calls.INCOMING_TYPE -> "Incoming"
+                                android.provider.CallLog.Calls.OUTGOING_TYPE -> "Outgoing"
+                                android.provider.CallLog.Calls.MISSED_TYPE -> "Missed"
+                                android.provider.CallLog.Calls.REJECTED_TYPE -> "Rejected"
+                                android.provider.CallLog.Calls.BLOCKED_TYPE -> "Blocked"
+                                else -> "Call"
+                            }
+                            val dateText = java.text.DateFormat.getDateTimeInstance(
+                                java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT
+                            ).format(java.util.Date(h.date))
+                            val durText = if (h.durationSeconds > 0) " • ${formatCallDuration(h.durationSeconds)}" else ""
+                            DetailRow(
+                                Icons.Filled.Call,
+                                "$typeLabel — $dateText$durText",
+                                h.number
+                            ) { }
+                        }
+                    }
                 }
             }
         }
@@ -197,4 +261,10 @@ private fun DetailRow(
         leadingContent = { Icon(icon, null, tint = MaterialTheme.colorScheme.primary) },
         modifier = Modifier.clickable(onClick = onClick)
     )
+}
+
+private fun formatCallDuration(seconds: Long): String {
+    val m = seconds / 60
+    val s = seconds % 60
+    return if (m > 0) "${m}m ${s}s" else "${s}s"
 }

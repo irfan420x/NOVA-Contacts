@@ -19,6 +19,64 @@ object ContactsRepo {
         ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_CONTACTS) ==
             PackageManager.PERMISSION_GRANTED
 
+    fun hasCallLogPermission(context: Context): Boolean =
+        ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALL_LOG) ==
+            PackageManager.PERMISSION_GRANTED
+
+    // ---------- v1.4: Recent calls for one contact ----------
+    // The call log is matched by the last 10 digits of each number, the
+    // same normalisation the duplicate finder uses.
+
+    data class CallHistoryItem(
+        val type: Int,
+        val date: Long,
+        val durationSeconds: Long,
+        val number: String
+    )
+
+    fun loadCallHistory(context: Context, numbers: List<String>): List<CallHistoryItem> {
+        if (!hasCallLogPermission(context) || numbers.isEmpty()) return emptyList()
+        val suffixes = numbers.mapNotNull { n ->
+            val d = n.filter { it.isDigit() }.takeLast(10)
+            d.ifEmpty { null }
+        }.toSet()
+        if (suffixes.isEmpty()) return emptyList()
+        val out = ArrayList<CallHistoryItem>()
+        try {
+            context.contentResolver.query(
+                android.provider.CallLog.Calls.CONTENT_URI,
+                arrayOf(
+                    android.provider.CallLog.Calls.TYPE,
+                    android.provider.CallLog.Calls.DATE,
+                    android.provider.CallLog.Calls.DURATION,
+                    android.provider.CallLog.Calls.NUMBER
+                ),
+                null, null,
+                "${android.provider.CallLog.Calls.DATE} DESC"
+            )?.use { c ->
+                val typeI = c.getColumnIndexOrThrow(android.provider.CallLog.Calls.TYPE)
+                val dateI = c.getColumnIndexOrThrow(android.provider.CallLog.Calls.DATE)
+                val durI = c.getColumnIndexOrThrow(android.provider.CallLog.Calls.DURATION)
+                val numI = c.getColumnIndexOrThrow(android.provider.CallLog.Calls.NUMBER)
+                while (c.moveToNext() && out.size < 10) {
+                    val raw = c.getString(numI) ?: continue
+                    val suffix = raw.filter { it.isDigit() }.takeLast(10)
+                    if (suffix !in suffixes) continue
+                    out += CallHistoryItem(
+                        type = c.getInt(typeI),
+                        date = c.getLong(dateI),
+                        durationSeconds = c.getLong(durI),
+                        number = raw
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            ErrorLog.log(context, "Contacts", "Failed to load call history", e)
+            return emptyList()
+        }
+        return out
+    }
+
     // ---------- Loading ----------
 
     /** All contacts, each with phones, emails, organisation and note. */

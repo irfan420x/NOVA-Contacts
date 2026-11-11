@@ -27,6 +27,8 @@ fun DuplicatesScreen(onBack: () -> Unit, onStatus: (String) -> Unit) {
     var groups by remember { mutableStateOf<List<List<FullContact>>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var merging by remember { mutableStateOf<List<FullContact>?>(null) }
+    var mergingAll by remember { mutableStateOf(false) }
+    var confirmMergeAll by remember { mutableStateOf(false) }
 
     fun load() {
         scope.launch {
@@ -53,6 +55,19 @@ fun DuplicatesScreen(onBack: () -> Unit, onStatus: (String) -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(16.dp))
+            // v1.4: merge every duplicate group in one tap.
+            if (groups.isNotEmpty()) {
+                Button(
+                    onClick = { confirmMergeAll = true },
+                    enabled = merging == null && !mergingAll,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Filled.Merge, null)
+                    Spacer(Modifier.width(4.dp))
+                    Text(if (mergingAll) "Merging all…" else "Merge all duplicates (${groups.size} groups)")
+                }
+                Spacer(Modifier.height(12.dp))
+            }
             when {
                 loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
                 groups.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -105,5 +120,44 @@ fun DuplicatesScreen(onBack: () -> Unit, onStatus: (String) -> Unit) {
                 }
             }
         }
+    }
+
+    if (confirmMergeAll) {
+        AlertDialog(
+            onDismissRequest = { confirmMergeAll = false },
+            title = { Text("Merge all duplicates?") },
+            text = {
+                Text(
+                    "${groups.size} duplicate groups will each be merged into one " +
+                        "contact, keeping the most complete entry. The extra copies are deleted."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmMergeAll = false
+                    mergingAll = true
+                    scope.launch {
+                        var merged = 0
+                        var failed = 0
+                        val snapshot = groups
+                        for (group in snapshot) {
+                            val ok = withContext(Dispatchers.IO) {
+                                ContactsRepo.mergeGroup(context, group)
+                            }
+                            if (ok) merged++ else failed++
+                        }
+                        mergingAll = false
+                        onStatus(
+                            "Merged $merged group${if (merged != 1) "s" else ""}" +
+                                if (failed > 0) " ($failed failed)" else ""
+                        )
+                        load()
+                    }
+                }) { Text("Merge all") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmMergeAll = false }) { Text("Cancel") }
+            }
+        )
     }
 }

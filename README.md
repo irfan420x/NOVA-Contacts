@@ -51,6 +51,10 @@ Minimum SDK 29 (Android 10), target SDK 35.
 
 ## Version history
 
+- **v1.4** — Advanced: Recent calls in the contact detail screen (last 10
+  calls with that contact, matched by number, with an on-demand call-log
+  permission request — the app works without it) and Merge all duplicates
+  (one tap merges every duplicate group, with a confirmation dialog).
 - **v1.3** — Full audit fix (data loss): editing a contact deleted EVERY
   detail row except the name — silently destroying the contact's photo,
   group memberships, websites and other data. Only the rows this editor
