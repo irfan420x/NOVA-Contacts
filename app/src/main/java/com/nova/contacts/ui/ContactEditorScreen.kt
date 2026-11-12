@@ -1,6 +1,7 @@
 package com.nova.contacts.ui
 
 import android.provider.ContactsContract
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -17,7 +18,10 @@ import com.nova.contacts.data.ContactsRepo
 import com.nova.contacts.data.EmailEntry
 import com.nova.contacts.data.FullContact
 import com.nova.contacts.data.PhoneEntry
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.UUID
 
 private val PHONE_TYPES = listOf(
     ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE to "Mobile",
@@ -39,6 +43,11 @@ private val EMAIL_TYPES = listOf(
     ContactsContract.CommonDataKinds.Email.TYPE_CUSTOM to "Custom"
 )
 
+/** One editor row with a stable id. v1.7: the rows used to be keyed by
+ *  position, so removing a middle row could keep the wrong field's
+ *  state (two identical empty rows even shared a key). */
+private data class EditorRow<T>(val id: String, val value: T)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ContactEditorScreen(
@@ -53,11 +62,17 @@ fun ContactEditorScreen(
     // v1.5: the editor keeps the full entries (number + type), not just the
     // strings — the old editor rewrote every number to Mobile and every
     // email to Other on every save.
-    var phones by remember(contact) {
-        mutableStateOf(contact?.phones?.toMutableList() ?: mutableListOf(PhoneEntry("")))
+    var phoneRows by remember(contact) {
+        mutableStateOf(
+            (contact?.phones ?: listOf(PhoneEntry("")))
+                .map { EditorRow(UUID.randomUUID().toString(), it) }
+        )
     }
-    var emails by remember(contact) {
-        mutableStateOf(contact?.emails?.toMutableList() ?: mutableListOf(EmailEntry("")))
+    var emailRows by remember(contact) {
+        mutableStateOf(
+            (contact?.emails ?: listOf(EmailEntry("")))
+                .map { EditorRow(UUID.randomUUID().toString(), it) }
+        )
     }
     var organization by remember(contact) { mutableStateOf(contact?.organization ?: "") }
     // v1.5: job title is its own field — the old code merged it into the
@@ -65,41 +80,83 @@ fun ContactEditorScreen(
     var jobTitle by remember(contact) { mutableStateOf(contact?.jobTitle ?: "") }
     var note by remember(contact) { mutableStateOf(contact?.note ?: "") }
     var saving by remember { mutableStateOf(false) }
+    var confirmDiscard by remember { mutableStateOf(false) }
     val isEdit = contact != null
+
+    // v1.7: leaving the editor with unsaved changes used to discard them
+    // silently. Compare against the values the editor opened with.
+    val initName = remember(contact) { contact?.displayName ?: "" }
+    val initPhones = remember(contact) { contact?.phones ?: listOf(PhoneEntry("")) }
+    val initEmails = remember(contact) { contact?.emails ?: listOf(EmailEntry("")) }
+    val initOrg = remember(contact) { contact?.organization ?: "" }
+    val initTitle = remember(contact) { contact?.jobTitle ?: "" }
+    val initNote = remember(contact) { contact?.note ?: "" }
+    val isDirty = name != initName ||
+        phoneRows.map { it.value } != initPhones ||
+        emailRows.map { it.value } != initEmails ||
+        organization != initOrg || jobTitle != initTitle || note != initNote
+
+    fun requestBack() {
+        if (isDirty) confirmDiscard = true else onBack()
+    }
+    // The editor owns its own back handling so the system back button
+    // gets the same discard confirmation as the AppBar back button.
+    BackHandler { requestBack() }
+
+    fun save() {
+        if (saving) return
+        if (name.isBlank()) { onStatus("A name is required"); return }
+        // v1.7: basic validation — a phone with no digits or an email
+        // without '@' used to be saved as-is.
+        val badPhone = phoneRows.map { it.value }
+            .firstOrNull { it.number.isNotBlank() && it.number.count { ch -> ch.isDigit() } < 2 }
+        if (badPhone != null) {
+            onStatus("Phone number \"${badPhone.number}\" doesn't look like a number")
+            return
+        }
+        val badEmail = emailRows.map { it.value }
+            .firstOrNull { it.address.isNotBlank() && !isValidEmail(it.address) }
+        if (badEmail != null) {
+            onStatus("Email \"${badEmail.address}\" doesn't look like an email address")
+            return
+        }
+        if (!ContactsRepo.hasWritePermission(context)) {
+            onStatus("Couldn't save — contacts write permission is off")
+            return
+        }
+        saving = true
+        val draft = ContactDraft(
+            displayName = name.trim(),
+            phones = phoneRows.map { it.value },
+            emails = emailRows.map { it.value },
+            organization = organization,
+            jobTitle = jobTitle,
+            note = note
+        )
+        scope.launch {
+            // v1.7: provider writes run off the main thread.
+            val ok = withContext(Dispatchers.IO) {
+                if (isEdit) ContactsRepo.updateContact(context, contact!!.contactId, draft)
+                else ContactsRepo.createContact(context, draft)
+            }
+            saving = false
+            if (ok) {
+                onStatus(if (isEdit) "Contact updated" else "Contact added")
+                onSaved()
+            } else {
+                onStatus("Couldn't save — check the contacts permission")
+            }
+        }
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text(if (isEdit) "Edit contact" else "New contact", fontWeight = FontWeight.Bold) },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, "Back") } },
+                navigationIcon = { IconButton(onClick = { requestBack() }) { Icon(Icons.Filled.ArrowBack, "Back") } },
                 actions = {
                     TextButton(
-                        onClick = {
-                            if (name.isBlank()) { onStatus("A name is required"); return@TextButton }
-                            saving = true
-                            val draft = ContactDraft(
-                                displayName = name.trim(),
-                                phones = phones,
-                                emails = emails,
-                                organization = organization,
-                                jobTitle = jobTitle,
-                                note = note
-                            )
-                            scope.launch {
-                                val ok = if (isEdit) {
-                                    ContactsRepo.updateContact(context, contact!!.contactId, draft)
-                                } else {
-                                    ContactsRepo.createContact(context, draft)
-                                }
-                                saving = false
-                                if (ok) {
-                                    onStatus(if (isEdit) "Contact updated" else "Contact added")
-                                    onSaved()
-                                } else {
-                                    onStatus("Couldn't save — check the contacts permission")
-                                }
-                            }
-                        },
+                        onClick = { save() },
                         enabled = !saving && name.isNotBlank()
                     ) { Text(if (saving) "Saving…" else "Save") }
                 }
@@ -117,106 +174,134 @@ fun ContactEditorScreen(
                 modifier = Modifier.fillMaxWidth()
             )
             Text("Phone", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-            phones.forEachIndexed { i, p ->
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = p.number, onValueChange = { value ->
-                            phones = phones.toMutableList().also { it[i] = p.copy(number = value) }
-                        },
-                        label = { Text("Phone ${i + 1}") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f)
-                    )
-                    TypePicker(
-                        label = if (p.type == ContactsContract.CommonDataKinds.Phone.TYPE_CUSTOM) {
-                            p.customLabel?.takeIf { it.isNotBlank() } ?: "Custom"
-                        } else p.typeLabel,
-                        options = PHONE_TYPES,
-                        onPick = { type, label ->
-                            phones = phones.toMutableList().also {
-                                it[i] = if (type == ContactsContract.CommonDataKinds.Phone.TYPE_CUSTOM) {
-                                    p.copy(type = type, typeLabel = "Custom", customLabel = p.customLabel ?: "")
-                                } else {
-                                    p.copy(type = type, typeLabel = label, customLabel = null)
+            phoneRows.forEach { row ->
+                key(row.id) {
+                    val p = row.value
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = p.number, onValueChange = { value ->
+                                phoneRows = phoneRows.map {
+                                    if (it.id == row.id) it.copy(value = p.copy(number = value)) else it
+                                }
+                            },
+                            label = { Text("Phone") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TypePicker(
+                            label = if (p.type == ContactsContract.CommonDataKinds.Phone.TYPE_CUSTOM) {
+                                p.customLabel?.takeIf { it.isNotBlank() } ?: "Custom"
+                            } else p.typeLabel,
+                            options = PHONE_TYPES,
+                            onPick = { type, label ->
+                                phoneRows = phoneRows.map {
+                                    if (it.id == row.id) {
+                                        it.copy(
+                                            value = if (type == ContactsContract.CommonDataKinds.Phone.TYPE_CUSTOM) {
+                                                p.copy(type = type, typeLabel = "Custom", customLabel = p.customLabel ?: "")
+                                            } else {
+                                                p.copy(type = type, typeLabel = label, customLabel = null)
+                                            }
+                                        )
+                                    } else it
                                 }
                             }
-                        }
-                    )
-                    if (phones.size > 1) {
-                        IconButton(onClick = { phones = phones.toMutableList().also { it.removeAt(i) } }) {
-                            Icon(Icons.Filled.RemoveCircle, "Remove phone")
+                        )
+                        if (phoneRows.size > 1) {
+                            IconButton(onClick = { phoneRows = phoneRows.filter { it.id != row.id } }) {
+                                Icon(Icons.Filled.RemoveCircle, "Remove phone")
+                            }
                         }
                     }
-                }
-                // v1.6: a custom type needs its label typed out, or the
-                // label is lost and the number shows as "Other" after save.
-                if (p.type == ContactsContract.CommonDataKinds.Phone.TYPE_CUSTOM) {
-                    OutlinedTextField(
-                        value = p.customLabel ?: "", onValueChange = { value ->
-                            phones = phones.toMutableList().also { it[i] = p.copy(customLabel = value, typeLabel = value.ifBlank { "Custom" }) }
-                        },
-                        label = { Text("Custom label (e.g. Assistant)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    // v1.6: a custom type needs its label typed out, or the
+                    // label is lost and the number shows as "Other" after save.
+                    if (p.type == ContactsContract.CommonDataKinds.Phone.TYPE_CUSTOM) {
+                        OutlinedTextField(
+                            value = p.customLabel ?: "", onValueChange = { value ->
+                                phoneRows = phoneRows.map {
+                                    if (it.id == row.id) it.copy(
+                                        value = p.copy(customLabel = value, typeLabel = value.ifBlank { "Custom" })
+                                    ) else it
+                                }
+                            },
+                            label = { Text("Custom label (e.g. Assistant)") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                 }
             }
             OutlinedButton(onClick = {
-                phones = phones.toMutableList().also {
-                    it.add(PhoneEntry("", ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE, "Mobile"))
-                }
+                phoneRows = phoneRows + EditorRow(
+                    UUID.randomUUID().toString(),
+                    PhoneEntry("", ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE, "Mobile")
+                )
             }) {
                 Icon(Icons.Filled.Add, null)
                 Spacer(Modifier.width(4.dp))
                 Text("Add phone")
             }
             Text("Email", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-            emails.forEachIndexed { i, e ->
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = e.address, onValueChange = { value ->
-                            emails = emails.toMutableList().also { it[i] = e.copy(address = value) }
-                        },
-                        label = { Text("Email ${i + 1}") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f)
-                    )
-                    TypePicker(
-                        label = if (e.type == ContactsContract.CommonDataKinds.Email.TYPE_CUSTOM) {
-                            e.customLabel?.takeIf { it.isNotBlank() } ?: "Custom"
-                        } else e.typeLabel,
-                        options = EMAIL_TYPES,
-                        onPick = { type, label ->
-                            emails = emails.toMutableList().also {
-                                it[i] = if (type == ContactsContract.CommonDataKinds.Email.TYPE_CUSTOM) {
-                                    e.copy(type = type, typeLabel = "Custom", customLabel = e.customLabel ?: "")
-                                } else {
-                                    e.copy(type = type, typeLabel = label, customLabel = null)
+            emailRows.forEach { row ->
+                key(row.id) {
+                    val e = row.value
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = e.address, onValueChange = { value ->
+                                emailRows = emailRows.map {
+                                    if (it.id == row.id) it.copy(value = e.copy(address = value)) else it
+                                }
+                            },
+                            label = { Text("Email") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TypePicker(
+                            label = if (e.type == ContactsContract.CommonDataKinds.Email.TYPE_CUSTOM) {
+                                e.customLabel?.takeIf { it.isNotBlank() } ?: "Custom"
+                            } else e.typeLabel,
+                            options = EMAIL_TYPES,
+                            onPick = { type, label ->
+                                emailRows = emailRows.map {
+                                    if (it.id == row.id) {
+                                        it.copy(
+                                            value = if (type == ContactsContract.CommonDataKinds.Email.TYPE_CUSTOM) {
+                                                e.copy(type = type, typeLabel = "Custom", customLabel = e.customLabel ?: "")
+                                            } else {
+                                                e.copy(type = type, typeLabel = label, customLabel = null)
+                                            }
+                                        )
+                                    } else it
                                 }
                             }
-                        }
-                    )
-                    if (emails.size > 1) {
-                        IconButton(onClick = { emails = emails.toMutableList().also { it.removeAt(i) } }) {
-                            Icon(Icons.Filled.RemoveCircle, "Remove email")
+                        )
+                        if (emailRows.size > 1) {
+                            IconButton(onClick = { emailRows = emailRows.filter { it.id != row.id } }) {
+                                Icon(Icons.Filled.RemoveCircle, "Remove email")
+                            }
                         }
                     }
-                }
-                if (e.type == ContactsContract.CommonDataKinds.Email.TYPE_CUSTOM) {
-                    OutlinedTextField(
-                        value = e.customLabel ?: "", onValueChange = { value ->
-                            emails = emails.toMutableList().also { it[i] = e.copy(customLabel = value, typeLabel = value.ifBlank { "Custom" }) }
-                        },
-                        label = { Text("Custom label") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    if (e.type == ContactsContract.CommonDataKinds.Email.TYPE_CUSTOM) {
+                        OutlinedTextField(
+                            value = e.customLabel ?: "", onValueChange = { value ->
+                                emailRows = emailRows.map {
+                                    if (it.id == row.id) it.copy(
+                                        value = e.copy(customLabel = value, typeLabel = value.ifBlank { "Custom" })
+                                    ) else it
+                                }
+                            },
+                            label = { Text("Custom label") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                 }
             }
             OutlinedButton(onClick = {
-                emails = emails.toMutableList().also {
-                    it.add(EmailEntry("", ContactsContract.CommonDataKinds.Email.TYPE_OTHER, "Other"))
-                }
+                emailRows = emailRows + EditorRow(
+                    UUID.randomUUID().toString(),
+                    EmailEntry("", ContactsContract.CommonDataKinds.Email.TYPE_OTHER, "Other")
+                )
             }) {
                 Icon(Icons.Filled.Add, null)
                 Spacer(Modifier.width(4.dp))
@@ -241,6 +326,28 @@ fun ContactEditorScreen(
             )
         }
     }
+
+    if (confirmDiscard) {
+        AlertDialog(
+            onDismissRequest = { confirmDiscard = false },
+            title = { Text("Discard changes?") },
+            text = { Text("Your unsaved changes to this contact will be lost.") },
+            confirmButton = {
+                TextButton(onClick = { confirmDiscard = false; onBack() }) {
+                    Text("Discard", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDiscard = false }) { Text("Keep editing") }
+            }
+        )
+    }
+}
+
+private fun isValidEmail(address: String): Boolean {
+    val a = address.trim()
+    val at = a.indexOf('@')
+    return at > 0 && at < a.length - 1 && a.indexOf('@', at + 1) < 0
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

@@ -5,22 +5,34 @@ package com.nova.contacts.data
  * format every contacts app understands. Kept dependency-free so the
  * parser can be unit-tested on the JVM without a device.
  *
- * Supported properties: FN (name), TEL, EMAIL, ORG, NOTE. Values are
- * escaped per the spec (backslash, comma, semicolon, newline).
+ * Supported properties: FN (name), TEL, EMAIL, ORG, TITLE, NOTE. Values
+ * are escaped per the spec (backslash, comma, semicolon, newline).
+ * Phone/email TYPE parameters are preserved (CELL/HOME/WORK/… and custom
+ * labels) so a backup/restore cycle no longer flattens every number to
+ * Mobile and every email to Other.
  */
 object VCard {
 
+    /** A phone number with its vCard TYPE token ("CELL", "HOME", …) or a
+     *  custom label for TYPE_CUSTOM ("Assistant"). */
+    data class VCardPhone(val number: String, val typeToken: String? = null)
+    data class VCardEmail(val address: String, val typeToken: String? = null)
+
     data class VCardContact(
         val name: String,
-        val phones: List<String> = emptyList(),
-        val emails: List<String> = emptyList(),
+        val phones: List<VCardPhone> = emptyList(),
+        val emails: List<VCardEmail> = emptyList(),
         val org: String? = null,
         val jobTitle: String? = null,
         val note: String? = null
     )
 
     private fun escape(value: String): String =
-        value.replace("\\", "\\\\").replace("\n", "\\n").replace(",", "\\,").replace(";", "\\;")
+        // v1.7: a bare CR inside a value broke the card — the line
+        // splitter treats \r as a line break. Normalise CR(LF) to \n
+        // before escaping so the value round-trips.
+        value.replace("\r\n", "\n").replace("\r", "\n")
+            .replace("\\", "\\\\").replace("\n", "\\n").replace(",", "\\,").replace(";", "\\;")
 
     private fun unescape(value: String): String {
         val out = StringBuilder()
@@ -44,20 +56,52 @@ object VCard {
         return out.toString()
     }
 
+    /** A TYPE parameter value safe to write unquoted, else quoted. */
+    private fun typeParam(token: String?): String? {
+        if (token.isNullOrBlank()) return null
+        return if (token.all { it.isLetterOrDigit() || it == '-' }) token
+        else "\"" + token.replace("\"", "") + "\""
+    }
+
     fun generate(contacts: List<VCardContact>): String = buildString {
         for (c in contacts) {
             if (c.name.isBlank() && c.phones.isEmpty()) continue
             append("BEGIN:VCARD\r\n")
             append("VERSION:3.0\r\n")
             append("FN:${escape(c.name)}\r\n")
-            for (p in c.phones) append("TEL;TYPE=CELL:${escape(p)}\r\n")
-            for (e in c.emails) append("EMAIL:${escape(e)}\r\n")
+            for (p in c.phones) {
+                val t = typeParam(p.typeToken)
+                if (t != null) append("TEL;TYPE=$t:${escape(p.number)}\r\n")
+                else append("TEL:${escape(p.number)}\r\n")
+            }
+            for (e in c.emails) {
+                val t = typeParam(e.typeToken)
+                if (t != null) append("EMAIL;TYPE=$t:${escape(e.address)}\r\n")
+                else append("EMAIL:${escape(e.address)}\r\n")
+            }
             c.org?.takeIf { it.isNotBlank() }?.let { append("ORG:${escape(it)}\r\n") }
             // v1.6: job title survives backup/restore (was silently dropped).
             c.jobTitle?.takeIf { it.isNotBlank() }?.let { append("TITLE:${escape(it)}\r\n") }
             c.note?.takeIf { it.isNotBlank() }?.let { append("NOTE:${escape(it)}\r\n") }
             append("END:VCARD\r\n")
         }
+    }
+
+    /** Splits a property part ("TEL;TYPE=CELL" / "item1.TEL;TYPE=\"My Label\"")
+     *  on ';' without splitting inside quotes. */
+    private fun splitParams(part: String): List<String> {
+        val out = mutableListOf<String>()
+        val cur = StringBuilder()
+        var inQuotes = false
+        for (ch in part) {
+            when {
+                ch == '"' -> { inQuotes = !inQuotes; cur.append(ch) }
+                ch == ';' && !inQuotes -> { out += cur.toString(); cur.clear() }
+                else -> cur.append(ch)
+            }
+        }
+        out += cur.toString()
+        return out
     }
 
     /**
@@ -82,8 +126,8 @@ object VCard {
         }
         val out = mutableListOf<VCardContact>()
         var name = ""
-        var phones = mutableListOf<String>()
-        var emails = mutableListOf<String>()
+        var phones = mutableListOf<VCardPhone>()
+        var emails = mutableListOf<VCardEmail>()
         var org: String? = null
         var jobTitle: String? = null
         var note: String? = null
@@ -95,7 +139,8 @@ object VCard {
             name = ""; phones = mutableListOf(); emails = mutableListOf(); org = null; jobTitle = null; note = null
         }
         for (line in logical) {
-            val upper = line.uppercase()
+            // v1.7: tolerate trailing whitespace on BEGIN/END lines.
+            val upper = line.trim().uppercase()
             when {
                 upper == "BEGIN:VCARD" -> { flush(); inCard = true }
                 upper == "END:VCARD" -> { flush(); inCard = false }
@@ -103,12 +148,24 @@ object VCard {
                 else -> {
                     val colon = line.indexOf(':')
                     if (colon < 0) continue
-                    val key = line.substring(0, colon).uppercase().substringBefore(';')
+                    val propPart = line.substring(0, colon)
+                    // v1.7: strip a group prefix ("item1.FN") and any
+                    // parameters — the property name is the part before
+                    // the first ';', after the last '.'.
+                    val key = propPart.substringBefore(';').substringAfterLast('.').uppercase()
                     val value = unescape(line.substring(colon + 1))
+                    // TYPE parameters (first one wins; quoted values unquoted).
+                    val typeToken = splitParams(propPart).drop(1)
+                        .firstNotNullOfOrNull { param ->
+                            val eq = param.indexOf('=')
+                            if (eq > 0 && param.substring(0, eq).trim().uppercase() == "TYPE") {
+                                param.substring(eq + 1).trim().removeSurrounding("\"").takeIf { it.isNotBlank() }
+                            } else null
+                        }
                     when (key) {
                         "FN" -> name = value
-                        "TEL" -> if (value.isNotBlank()) phones += value
-                        "EMAIL" -> if (value.isNotBlank()) emails += value
+                        "TEL" -> if (value.isNotBlank()) phones += VCardPhone(value, typeToken)
+                        "EMAIL" -> if (value.isNotBlank()) emails += VCardEmail(value, typeToken)
                         "ORG" -> org = value
                         "TITLE" -> jobTitle = value
                         "NOTE" -> note = value

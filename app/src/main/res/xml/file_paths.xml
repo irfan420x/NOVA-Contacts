@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- v1.7: the cache/shared folder holds the .vcf file the Detail
+         share button sends through FileProvider. -->
+    <cache-path name="shared" path="shared/" />
+</paths>

@@ -13,8 +13,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.nova.contacts.data.ContactUtils
 import com.nova.contacts.data.ContactsRepo
-import com.nova.contacts.data.FullContact
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -24,9 +24,9 @@ import kotlinx.coroutines.withContext
 fun DuplicatesScreen(onBack: () -> Unit, onStatus: (String) -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var groups by remember { mutableStateOf<List<List<FullContact>>>(emptyList()) }
+    var groups by remember { mutableStateOf<List<ContactUtils.DuplicateGroup>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
-    var merging by remember { mutableStateOf<List<FullContact>?>(null) }
+    var merging by remember { mutableStateOf<ContactUtils.DuplicateGroup?>(null) }
     var mergingAll by remember { mutableStateOf(false) }
     var confirmMergeAll by remember { mutableStateOf(false) }
 
@@ -69,15 +69,27 @@ fun DuplicatesScreen(onBack: () -> Unit, onStatus: (String) -> Unit) {
                 Spacer(Modifier.height(12.dp))
             }
             when {
+                !ContactsRepo.hasContactsPermission(context) -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(
+                            "Contacts permission is needed to find duplicates.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
                 loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
                 groups.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("No duplicates found.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(groups, key = { it.first().contactId }) { group ->
+                    // v1.7: keyed by the shared number — the old key
+                    // (first().contactId) collided when one contact was
+                    // first() in two groups.
+                    items(groups, key = { it.number }) { group ->
+                        val members = group.contacts
                         Card(Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(16.dp)) {
-                                group.forEach { c ->
+                                members.forEach { c ->
                                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                         ContactPhoto(c, 40)
                                         Spacer(Modifier.width(12.dp))
@@ -95,19 +107,26 @@ fun DuplicatesScreen(onBack: () -> Unit, onStatus: (String) -> Unit) {
                                 }
                                 Button(
                                     onClick = {
+                                        if (!ContactsRepo.hasWritePermission(context)) {
+                                            onStatus("Write permission is off — allow it to merge contacts")
+                                            return@Button
+                                        }
                                         merging = group
                                         scope.launch {
                                             val ok = withContext(Dispatchers.IO) {
-                                                ContactsRepo.mergeGroup(context, group)
+                                                ContactsRepo.mergeGroup(context, members)
                                             }
                                             merging = null
                                             if (ok) {
-                                                onStatus("Merged ${group.size} contacts into one")
+                                                onStatus("Merged ${members.size} contacts into one")
                                                 load()
                                             } else onStatus("Couldn't merge these contacts")
                                         }
                                     },
-                                    enabled = merging == null,
+                                    // v1.7: per-group buttons used to stay
+                                    // enabled during "Merge all", so two
+                                    // merges could run on the same contacts.
+                                    enabled = merging == null && !mergingAll,
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     Icon(Icons.Filled.Merge, null)
@@ -135,16 +154,35 @@ fun DuplicatesScreen(onBack: () -> Unit, onStatus: (String) -> Unit) {
             confirmButton = {
                 TextButton(onClick = {
                     confirmMergeAll = false
+                    if (!ContactsRepo.hasWritePermission(context)) {
+                        onStatus("Write permission is off — allow it to merge contacts")
+                        return@TextButton
+                    }
                     mergingAll = true
                     scope.launch {
                         var merged = 0
                         var failed = 0
-                        val snapshot = groups
-                        for (group in snapshot) {
+                        // v1.7: re-resolve the groups after every merge.
+                        // The old code iterated one stale snapshot, so a
+                        // contact merged in group 1 was merged again from
+                        // its pre-merge data in group 2 (losing the
+                        // numbers the first merge had just added). Groups
+                        // that fail are skipped, not retried forever.
+                        val skipped = HashSet<String>()
+                        var guard = 0
+                        var remaining = withContext(Dispatchers.IO) {
+                            ContactsRepo.findDuplicates(context)
+                        }.filter { it.number !in skipped }
+                        while (remaining.isNotEmpty() && guard < 200) {
+                            guard++
+                            val group = remaining.first()
                             val ok = withContext(Dispatchers.IO) {
-                                ContactsRepo.mergeGroup(context, group)
+                                ContactsRepo.mergeGroup(context, group.contacts)
                             }
-                            if (ok) merged++ else failed++
+                            if (ok) merged++ else { failed++; skipped += group.number }
+                            remaining = withContext(Dispatchers.IO) {
+                                ContactsRepo.findDuplicates(context)
+                            }.filter { it.number !in skipped }
                         }
                         mergingAll = false
                         onStatus(

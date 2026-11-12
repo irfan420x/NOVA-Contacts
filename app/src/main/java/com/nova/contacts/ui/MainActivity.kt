@@ -30,6 +30,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import coil.compose.AsyncImage
 import com.nova.contacts.data.ContactUtils
 import com.nova.contacts.data.ContactsRepo
@@ -81,6 +83,7 @@ private fun saveDarkTheme(context: Context, dark: Boolean) {
 @Composable
 fun NovaContactsApp() {
     val context = LocalContext.current
+    val activity = context as? ComponentActivity
     val scope = rememberCoroutineScope()
     var screen by remember { mutableStateOf<ContactsScreen>(ContactsScreen.List) }
     var contacts by remember { mutableStateOf<List<FullContact>>(emptyList()) }
@@ -89,16 +92,30 @@ fun NovaContactsApp() {
     var loading by remember { mutableStateOf(true) }
     var darkTheme by remember { mutableStateOf(loadDarkTheme(context)) }
     var status by remember { mutableStateOf<String?>(null) }
-    var permissionsGranted by remember {
-        mutableStateOf(REQUIRED_PERMISSIONS.all {
-            ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
-        })
+    // v1.7: READ and WRITE are tracked separately. The old code required
+    // BOTH to show anything — granting READ but denying WRITE left the
+    // app stuck on the permission screen with no way to even view
+    // contacts. The list needs READ only; writes check WRITE themselves.
+    var readGranted by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) ==
+                PackageManager.PERMISSION_GRANTED
+        )
+    }
+    var writeGranted by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_CONTACTS) ==
+                PackageManager.PERMISSION_GRANTED
+        )
     }
     var skipPermissions by remember { mutableStateOf(false) }
 
     fun reload() {
         scope.launch {
-            loading = true
+            // v1.7: only spin on the first load — returning from a detail
+            // screen used to flash the spinner every time.
+            val firstLoad = contacts.isEmpty()
+            if (firstLoad) loading = true
             contacts = withContext(Dispatchers.IO) { ContactsRepo.loadAll(context) }
             duplicateCount = withContext(Dispatchers.IO) {
                 ContactUtils.groupDuplicates(contacts).size
@@ -112,11 +129,40 @@ fun NovaContactsApp() {
     }
     fun onStatus(msg: String) { status = msg }
 
+    // v1.7: re-check permissions on resume — granting access in Settings
+    // after "Continue without it" used to leave the app showing "No
+    // contacts yet" until it was killed and reopened.
+    DisposableEffect(activity) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && activity != null) {
+                val nowRead = ContextCompat.checkSelfPermission(
+                    activity, Manifest.permission.READ_CONTACTS
+                ) == PackageManager.PERMISSION_GRANTED
+                val nowWrite = ContextCompat.checkSelfPermission(
+                    activity, Manifest.permission.WRITE_CONTACTS
+                ) == PackageManager.PERMISSION_GRANTED
+                if (nowRead && !readGranted) {
+                    readGranted = true
+                    writeGranted = nowWrite
+                    skipPermissions = false
+                    reload()
+                } else if (nowWrite != writeGranted) {
+                    writeGranted = nowWrite
+                }
+            }
+        }
+        activity?.lifecycle?.addObserver(observer)
+        onDispose { activity?.lifecycle?.removeObserver(observer) }
+    }
+
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { results ->
-        permissionsGranted = REQUIRED_PERMISSIONS.all { results[it] == true }
-        if (permissionsGranted) reload()
+        // Only update the permissions that were actually requested —
+        // asking for WRITE alone must not clear the READ state.
+        results[Manifest.permission.READ_CONTACTS]?.let { readGranted = it }
+        results[Manifest.permission.WRITE_CONTACTS]?.let { writeGranted = it }
+        if (readGranted) { skipPermissions = false; reload() }
     }
 
     // vCard import: pick a .vcf file, read it, create the contacts.
@@ -125,6 +171,10 @@ fun NovaContactsApp() {
     ) { uri: Uri? ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
+            if (!ContactsRepo.hasWritePermission(context)) {
+                onStatus("Can't import — contacts write permission is off")
+                return@launch
+            }
             val text = withContext(Dispatchers.IO) {
                 try {
                     context.contentResolver.openInputStream(uri)?.bufferedReader()?.readText()
@@ -145,31 +195,47 @@ fun NovaContactsApp() {
     ) { uri: Uri? ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
-            val ok = withContext(Dispatchers.IO) {
+            if (!ContactsRepo.hasContactsPermission(context)) {
+                onStatus("Can't export — contacts permission is off")
+                return@launch
+            }
+            val result = withContext(Dispatchers.IO) {
                 try {
-                    val vcard = ContactsRepo.exportVCard(context)
+                    val (vcard, exported) = ContactsRepo.exportVCard(context)
                     context.contentResolver.openOutputStream(uri)?.writer()?.use { it.write(vcard) }
-                    true
+                    exported
                 } catch (e: Exception) {
                     ErrorLog.log(context, "Export", "Failed to write the .vcf file", e)
-                    false
+                    -1
                 }
             }
-            onStatus(if (ok) "Backup saved (${contacts.size} contacts)" else "Couldn't save the backup")
+            onStatus(
+                when {
+                    result < 0 -> "Couldn't save the backup"
+                    result == 0 -> "Backup saved — no contacts to export"
+                    else -> "Backup saved ($result contact${if (result == 1) "" else "s"})"
+                }
+            )
         }
     }
 
     NovaTheme(darkTheme = darkTheme) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            // System back button: step back to the list instead of exiting the app.
+            // System back button: step back to the list instead of exiting
+            // the app. v1.7: the back handler now runs the SAME navigation
+            // as the AppBar back button (including reload) — the old
+            // handler just switched screens, so starring a contact then
+            // pressing system-back left the list showing stale data.
+            // The Editor owns its own BackHandler (discard confirmation).
             when (val s = screen) {
-                is ContactsScreen.ErrorLog, is ContactsScreen.Duplicates, is ContactsScreen.Detail -> {
+                is ContactsScreen.ErrorLog -> {
                     BackHandler { screen = ContactsScreen.List }
                 }
-                is ContactsScreen.Editor -> {
-                    BackHandler {
-                        screen = if (s.contact == null) ContactsScreen.List else ContactsScreen.Detail(s.contact)
-                    }
+                is ContactsScreen.Duplicates -> {
+                    BackHandler { screen = ContactsScreen.List; reload() }
+                }
+                is ContactsScreen.Detail -> {
+                    BackHandler { screen = ContactsScreen.List; reload() }
                 }
                 else -> {}
             }
@@ -192,7 +258,7 @@ fun NovaContactsApp() {
                     onStatus = ::onStatus
                 )
                 is ContactsScreen.List -> {
-                    if (!permissionsGranted && !skipPermissions) {
+                    if (!readGranted && !skipPermissions) {
                         PermissionScreen(
                             onGrant = { permissionLauncher.launch(REQUIRED_PERMISSIONS) },
                             onSkip = { skipPermissions = true }
@@ -233,7 +299,16 @@ fun NovaContactsApp() {
                                 )
                             },
                             floatingActionButton = {
-                                FloatingActionButton(onClick = { screen = ContactsScreen.Editor(null) }) {
+                                FloatingActionButton(onClick = {
+                                    // v1.7: don't open the editor to a dead
+                                    // end when writing is not allowed.
+                                    if (!writeGranted) {
+                                        onStatus("Write permission is off — tap Allow to add contacts")
+                                        permissionLauncher.launch(arrayOf(Manifest.permission.WRITE_CONTACTS))
+                                    } else {
+                                        screen = ContactsScreen.Editor(null)
+                                    }
+                                }) {
                                     Icon(Icons.Filled.PersonAdd, "Add contact")
                                 }
                             }
@@ -261,7 +336,8 @@ fun NovaContactsApp() {
                                     contacts = contacts,
                                     query = query,
                                     loading = loading,
-                                    onOpen = { screen = ContactsScreen.Detail(it) }
+                                    onOpen = { screen = ContactsScreen.Detail(it) },
+                                    onRequestPermission = { permissionLauncher.launch(REQUIRED_PERMISSIONS) }
                                 )
                             }
                         }
@@ -278,7 +354,8 @@ private fun ContactList(
     contacts: List<FullContact>,
     query: String,
     loading: Boolean,
-    onOpen: (FullContact) -> Unit
+    onOpen: (FullContact) -> Unit,
+    onRequestPermission: () -> Unit
 ) {
     val context = LocalContext.current
     val filtered = remember(query, contacts) {
@@ -289,8 +366,19 @@ private fun ContactList(
     val searching = query.isNotBlank()
     when {
         !ContactsRepo.hasContactsPermission(context) -> {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("Contacts need permission", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            // v1.7: "Continue without it" used to be a one-way door — this
+            // screen had no way back to the permission request.
+            Column(
+                Modifier.fillMaxSize().padding(24.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    "Contacts need permission to show your contacts.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(16.dp))
+                Button(onClick = onRequestPermission) { Text("Allow access") }
             }
         }
         loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
@@ -373,9 +461,13 @@ private fun ContactList(
 
 @Composable
 fun ContactPhoto(c: FullContact, sizeDp: Int) {
-    if (c.photoUri != null) {
+    // v1.7: a broken/removed photo URI used to render a blank circle.
+    // Fall back to the initial letter when the image fails to load.
+    var photoFailed by remember(c.photoUri) { mutableStateOf(false) }
+    if (c.photoUri != null && !photoFailed) {
         AsyncImage(
             model = c.photoUri, contentDescription = null,
+            onError = { photoFailed = true },
             modifier = Modifier.size(sizeDp.dp).clip(CircleShape)
         )
     } else {

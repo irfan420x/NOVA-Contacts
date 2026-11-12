@@ -3,6 +3,7 @@ package com.nova.contacts.ui
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -14,26 +15,45 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.nova.contacts.data.ErrorLog
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ErrorLogScreen(onBack: () -> Unit) {
     val context = LocalContext.current
+    val activity = context as? ComponentActivity
     var entries by remember { mutableStateOf(ErrorLog.read(context)) }
     var status by remember { mutableStateOf("") }
+    // v1.7: entries were read once at composition — errors logged while
+    // this screen was open never appeared until the app was restarted.
+    DisposableEffect(activity) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                entries = ErrorLog.read(context)
+            }
+        }
+        activity?.lifecycle?.addObserver(observer)
+        onDispose { activity?.lifecycle?.removeObserver(observer) }
+    }
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Error log") },
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, "Back") } },
                 actions = {
-                    TextButton(onClick = {
-                        val text = entries.joinToString("\n---\n")
-                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        cm.setPrimaryClip(ClipData.newPlainText("NOVA Contacts error log", text))
-                        status = "Copied — paste it in a message to share it"
-                    }) { Text("Copy") }
+                    TextButton(
+                        onClick = {
+                            val text = entries.joinToString("\n---\n")
+                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            cm.setPrimaryClip(ClipData.newPlainText("NOVA Contacts error log", text))
+                            status = "Copied — paste it in a message to share it"
+                        },
+                        // v1.7: Copy used to be enabled with an empty log,
+                        // copying an empty string and reporting "Copied".
+                        enabled = entries.isNotEmpty()
+                    ) { Text("Copy") }
                     TextButton(onClick = {
                         ErrorLog.clear(context)
                         entries = emptyList()

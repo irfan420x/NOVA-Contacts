@@ -14,14 +14,26 @@ object ContactUtils {
     }
 
     /**
-     * The identity of a phone number for duplicate detection: the last 10
-     * digits. This treats +8801712345678, 01712345678 and 1712345678 as the
-     * same number (country-code / trunk-prefix differences).
+     * The identity of a phone number for duplicate detection.
+     * v1.7: the old rule was a blind last-10 digits — it wrongly equated
+     * "0171234567" with "10171234567" (different numbers that share a
+     * 10-digit suffix; proven by unit test). Strip the country/trunk
+     * prefix first (880 / 0, the same rule search uses), and only then
+     * take the last 10 digits when the number is still longer than 10
+     * (a foreign country code, e.g. US +1). BD forms (+8801712…,
+     * 01712…, 8801712…, 1712…) still group together; "10171234567"
+     * no longer collides with "0171234567".
      */
     fun normalizeNumber(number: String): String {
-        val d = digitsOnly(number).removePrefix("+")
+        val d = normalizeForMatch(digitsOnly(number))
         return if (d.length > 10) d.takeLast(10) else d
     }
+
+    /** One duplicate group: the shared normalised number + its contacts.
+     *  v1.7: the number is part of the group so the UI can key the list
+     *  by it — keying by first().contactId collided when one contact
+     *  with two numbers was first() in two groups (proven by unit test). */
+    data class DuplicateGroup(val number: String, val contacts: List<FullContact>)
 
     /**
      * Groups contacts that share a phone number. A contact can match
@@ -29,7 +41,7 @@ object ContactUtils {
      * number, so the same person with two different numbers appears in
      * two groups. Only groups with 2+ contacts are returned.
      */
-    fun groupDuplicates(contacts: List<FullContact>): List<List<FullContact>> {
+    fun groupDuplicates(contacts: List<FullContact>): List<DuplicateGroup> {
         val byNumber = LinkedHashMap<String, MutableSet<FullContact>>()
         for (c in contacts) {
             for (p in c.phones) {
@@ -38,7 +50,8 @@ object ContactUtils {
                 byNumber.getOrPut(n) { linkedSetOf() } += c
             }
         }
-        return byNumber.values.filter { it.size >= 2 }.map { it.toList() }
+        return byNumber.entries.filter { it.value.size >= 2 }
+            .map { DuplicateGroup(it.key, it.value.toList()) }
     }
 
     /** True when the query matches the contact (name, or a number/T9 prefix). */

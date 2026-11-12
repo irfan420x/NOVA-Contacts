@@ -51,6 +51,17 @@ Minimum SDK 29 (Android 10), target SDK 35.
 
 ## Version history
 
+- **v1.7** — Final audit: duplicate detection no longer equates different
+  numbers (the last-10-digits rule grouped `0171234567` with
+  `10171234567`); merge now carries the loser's photo, birthday, groups,
+  websites and addresses, prefers a synced contact to keep, re-reads
+  members fresh, and reports failure honestly; a partial permission grant
+  (READ yes, WRITE no) no longer blocks the whole app; "Continue without
+  it" is no longer a one-way door; the editor is atomic, validates phone
+  and email, and asks before discarding changes; share sends a real .vcf
+  file with real phone/email types; call history is filtered
+  provider-side; durations show hours; provider writes run off the main
+  thread.
 - **v1.6** — Second-audit fixes: search now matches a number in any form
   (+880… / 017… / plain — both sides are normalized before comparing);
   custom phone/email type labels ("Assistant", "Car") survive an edit (the

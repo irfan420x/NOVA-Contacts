@@ -19,6 +19,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
 import com.nova.contacts.data.ContactsRepo
 import com.nova.contacts.data.ErrorLog
 import com.nova.contacts.data.FullContact
@@ -26,6 +27,7 @@ import com.nova.contacts.data.VCard
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -38,6 +40,7 @@ fun ContactDetailScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var starred by remember(contact) { mutableStateOf(contact.starred) }
+    var starring by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
 
     // v1.4: recent calls with this contact (needs the call-log permission,
@@ -54,6 +57,10 @@ fun ContactDetailScreen(
                     ContactsRepo.loadCallHistory(context, contact.phones.map { it.number })
                 }
             }
+        } else {
+            // v1.7: after a permanent denial the button used to do
+            // nothing at all — say why, instead of failing silently.
+            onStatus("Call history needs the call log permission — allow it in Settings")
         }
     }
     LaunchedEffect(contact.contactId) {
@@ -70,21 +77,42 @@ fun ContactDetailScreen(
                 title = { Text("Contact", fontWeight = FontWeight.Bold) },
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, "Back") } },
                 actions = {
-                    IconButton(onClick = {
-                        scope.launch {
-                            if (ContactsRepo.setStarred(context, contact.contactId, !starred)) {
-                                starred = !starred
-                            } else onStatus("Couldn't update favorite")
-                        }
-                    }) {
+                    IconButton(
+                        onClick = {
+                            if (starring) return@IconButton
+                            if (!ContactsRepo.hasWritePermission(context)) {
+                                onStatus("Write permission is off — allow it to change favorites")
+                                return@IconButton
+                            }
+                            starring = true
+                            val target = !starred
+                            scope.launch {
+                                val ok = withContext(Dispatchers.IO) {
+                                    ContactsRepo.setStarred(context, contact.contactId, target)
+                                }
+                                starring = false
+                                if (ok) starred = target
+                                else onStatus("Couldn't update favorite")
+                            }
+                        },
+                        enabled = !starring
+                    ) {
                         Icon(
                             if (starred) Icons.Filled.Star else Icons.Filled.StarBorder,
                             if (starred) "Remove from favorites" else "Add to favorites",
                             tint = if (starred) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    IconButton(onClick = onEdit) { Icon(Icons.Filled.Edit, "Edit") }
-                    IconButton(onClick = { confirmDelete = true }) { Icon(Icons.Filled.Delete, "Delete") }
+                    IconButton(onClick = {
+                        if (!ContactsRepo.hasWritePermission(context)) {
+                            onStatus("Write permission is off — allow it to edit contacts")
+                        } else onEdit()
+                    }) { Icon(Icons.Filled.Edit, "Edit") }
+                    IconButton(onClick = {
+                        if (!ContactsRepo.hasWritePermission(context)) {
+                            onStatus("Write permission is off — allow it to delete contacts")
+                        } else confirmDelete = true
+                    }) { Icon(Icons.Filled.Delete, "Delete") }
                 }
             )
         }
@@ -143,21 +171,11 @@ fun ContactDetailScreen(
                     }
                 }
                 FilledTonalButton(onClick = {
-                    val vcard = VCard.generate(listOf(VCard.VCardContact(
-                        name = contact.displayName,
-                        phones = contact.phones.map { it.number },
-                        emails = contact.emails.map { it.address },
-                        org = contact.organization,
-                        note = contact.note
-                    )))
-                    val intent = Intent(Intent.ACTION_SEND).apply {
-                        type = "text/x-vcard"
-                        putExtra(Intent.EXTRA_TEXT, vcard)
-                        putExtra(Intent.EXTRA_SUBJECT, "${contact.displayName}.vcf")
-                    }
-                    try { context.startActivity(Intent.createChooser(intent, "Share contact")) } catch (e: Exception) {
-                        ErrorLog.log(context, "Detail", "Failed to share contact", e)
-                        onStatus("Couldn't share this contact")
+                    scope.launch {
+                        val shared = withContext(Dispatchers.IO) {
+                            shareContactAsVcf(context, contact)
+                        }
+                        if (!shared) onStatus("Couldn't share this contact")
                     }
                 }) {
                     Icon(Icons.Filled.Share, null)
@@ -182,7 +200,7 @@ fun ContactDetailScreen(
                     Text("Email", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                     contact.emails.forEach { e ->
                         DetailRow(Icons.Filled.Email, e.address, e.typeLabel) {
-                            val intent = Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:${e.address}"))
+                            val intent = Intent(Intent.ACTION_SENDTO, Uri.fromParts("mailto", e.address, null))
                             try { context.startActivity(intent) } catch (ex: Exception) {
                                 ErrorLog.log(context, "Detail", "Failed to open email", ex)
                                 onStatus("Couldn't open email")
@@ -246,7 +264,10 @@ fun ContactDetailScreen(
                 TextButton(onClick = {
                     confirmDelete = false
                     scope.launch {
-                        if (ContactsRepo.deleteContact(context, contact.contactId)) {
+                        val ok = withContext(Dispatchers.IO) {
+                            ContactsRepo.deleteContact(context, contact.contactId)
+                        }
+                        if (ok) {
                             onStatus("Contact deleted")
                             onBack()
                         } else onStatus("Couldn't delete this contact")
@@ -255,6 +276,37 @@ fun ContactDetailScreen(
             },
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } }
         )
+    }
+}
+
+/**
+ * Shares one contact as a real .vcf file (not vCard text in EXTRA_TEXT,
+ * which most apps cannot import as a contact). v1.7: the old share sent
+ * type "text/x-vcard" with EXTRA_TEXT — receiving apps got plain text,
+ * not a contact file. Now the card (with its real types and job title)
+ * is written to a cache file and shared through FileProvider.
+ */
+private fun shareContactAsVcf(context: Context, contact: FullContact): Boolean {
+    return try {
+        val vcard = VCard.generate(listOf(ContactsRepo.toVCardContact(contact)))
+        val dir = File(context.cacheDir, "shared").apply { mkdirs() }
+        val safeName = contact.displayName
+            .replace(Regex("[^A-Za-z0-9._-]+"), "_").trim('_')
+            .takeIf { it.isNotBlank() } ?: "contact"
+        val file = File(dir, "$safeName.vcf")
+        file.writeText(vcard)
+        val uri = FileProvider.getUriForFile(context, "com.nova.contacts.provider", file)
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/x-vcard"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            clipData = ClipData.newUri(context.contentResolver, "Contact", uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(intent, "Share contact"))
+        true
+    } catch (e: Exception) {
+        ErrorLog.log(context, "Detail", "Failed to share contact", e)
+        false
     }
 }
 
@@ -273,8 +325,10 @@ private fun DetailRow(
     )
 }
 
+/** v1.7: hours were missing — a 1-hour call rendered as "60m 0s". */
 private fun formatCallDuration(seconds: Long): String {
-    val m = seconds / 60
+    val h = seconds / 3600
+    val m = (seconds % 3600) / 60
     val s = seconds % 60
-    return if (m > 0) "${m}m ${s}s" else "${s}s"
+    return if (h > 0) "${h}h ${m}m ${s}s" else if (m > 0) "${m}m ${s}s" else "${s}s"
 }
