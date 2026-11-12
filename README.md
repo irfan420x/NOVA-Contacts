@@ -51,6 +51,12 @@ Minimum SDK 29 (Android 10), target SDK 35.
 
 ## Version history
 
+- **v1.5** — Audit bug fixes: the editor no longer corrupts a contact's job
+  title into the company name (company and title are now separate fields),
+  and phone/email types are no longer flattened to Mobile/Other on every
+  edit — the editor has a type picker per row and preserves existing types.
+  Merge keeps the losers' phone/email types too, and the detail screen's
+  Call button uses `Uri.fromParts` so `#`/`*` in a number can't truncate it.
 - **v1.4** — Advanced: Recent calls in the contact detail screen (last 10
   calls with that contact, matched by number, with an on-demand call-log
   permission request — the app works without it) and Merge all duplicates

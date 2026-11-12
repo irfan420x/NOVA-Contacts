@@ -110,7 +110,9 @@ fun ContactDetailScreen(
                 val firstPhone = contact.phones.firstOrNull()?.number
                 if (firstPhone != null) {
                     FilledTonalButton(onClick = {
-                        val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$firstPhone"))
+                        // v1.5: Uri.fromParts keeps #/* intact — Uri.parse
+                        // treats # as a fragment delimiter and truncates.
+                        val intent = Intent(Intent.ACTION_DIAL, Uri.fromParts("tel", firstPhone, null))
                         try { context.startActivity(intent) } catch (e: Exception) {
                             ErrorLog.log(context, "Detail", "Failed to open dialer", e)
                             onStatus("Couldn't open the dialer")

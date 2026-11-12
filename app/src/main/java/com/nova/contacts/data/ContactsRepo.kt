@@ -139,6 +139,7 @@ object ContactsRepo {
             val phones = HashMap<Long, MutableList<PhoneEntry>>()
             val emails = HashMap<Long, MutableList<EmailEntry>>()
             val orgs = HashMap<Long, String>()
+            val titles = HashMap<Long, String>()
             val notes = HashMap<Long, String>()
             context.contentResolver.query(
                 ContactsContract.Data.CONTENT_URI, projection, selection, args,
@@ -159,17 +160,19 @@ object ContactsRepo {
                             val type = c.getInt(d2I)
                             val label = c.getString(d3I)
                             phones.getOrPut(id) { mutableListOf() } +=
-                                PhoneEntry(value, phoneTypeLabel(type, label))
+                                PhoneEntry(value, type, phoneTypeLabel(type, label))
                         }
                         ContactsContract.CommonDataKinds.Email.CONTENT_ITEM_TYPE -> {
                             val type = c.getInt(d2I)
                             val label = c.getString(d3I)
                             emails.getOrPut(id) { mutableListOf() } +=
-                                EmailEntry(value, emailTypeLabel(type, label))
+                                EmailEntry(value, type, emailTypeLabel(type, label))
                         }
                         ContactsContract.CommonDataKinds.Organization.CONTENT_ITEM_TYPE -> {
-                            val title = c.getString(d4I)
-                            orgs[id] = if (!title.isNullOrBlank()) "$value — $title" else value
+                            // v1.5: company and title are separate fields —
+                            // merging them here corrupted the title on edit.
+                            orgs[id] = value
+                            c.getString(d4I)?.takeIf { it.isNotBlank() }?.let { titles[id] = it }
                         }
                         ContactsContract.CommonDataKinds.Note.CONTENT_ITEM_TYPE -> {
                             notes[id] = value
@@ -182,6 +185,7 @@ object ContactsRepo {
                     phones = phones[h.contactId] ?: emptyList(),
                     emails = emails[h.contactId] ?: emptyList(),
                     organization = orgs[h.contactId],
+                    jobTitle = titles[h.contactId],
                     note = notes[h.contactId]
                 )
             }
@@ -210,27 +214,28 @@ object ContactsRepo {
                 .withValue(ContactsContract.RawContacts.ACCOUNT_NAME, null as String?)
                 .build()
             ops += nameOp(0, name)
-            for (p in draft.phones.map { it.trim() }.filter { it.isNotEmpty() }) {
+            for (p in draft.phones.filter { it.number.trim().isNotEmpty() }) {
                 ops += ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
                     .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, 0)
                     .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE)
-                    .withValue(ContactsContract.CommonDataKinds.Phone.NUMBER, p)
-                    .withValue(ContactsContract.CommonDataKinds.Phone.TYPE, ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE)
+                    .withValue(ContactsContract.CommonDataKinds.Phone.NUMBER, p.number.trim())
+                    .withValue(ContactsContract.CommonDataKinds.Phone.TYPE, p.type)
                     .build()
             }
-            for (e in draft.emails.map { it.trim() }.filter { it.isNotEmpty() }) {
+            for (e in draft.emails.filter { it.address.trim().isNotEmpty() }) {
                 ops += ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
                     .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, 0)
                     .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Email.CONTENT_ITEM_TYPE)
-                    .withValue(ContactsContract.CommonDataKinds.Email.ADDRESS, e)
-                    .withValue(ContactsContract.CommonDataKinds.Email.TYPE, ContactsContract.CommonDataKinds.Email.TYPE_OTHER)
+                    .withValue(ContactsContract.CommonDataKinds.Email.ADDRESS, e.address.trim())
+                    .withValue(ContactsContract.CommonDataKinds.Email.TYPE, e.type)
                     .build()
             }
-            if (draft.organization.isNotBlank()) {
+            if (draft.organization.isNotBlank() || draft.jobTitle.isNotBlank()) {
                 ops += ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
                     .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, 0)
                     .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Organization.CONTENT_ITEM_TYPE)
                     .withValue(ContactsContract.CommonDataKinds.Organization.COMPANY, draft.organization.trim())
+                    .withValue(ContactsContract.CommonDataKinds.Organization.TITLE, draft.jobTitle.trim())
                     .build()
             }
             if (draft.note.isNotBlank()) {
@@ -275,27 +280,28 @@ object ContactsRepo {
             // Update the name row (insert one if the contact somehow has none).
             val nameUpdated = updateNameRow(context, contactId, name)
             if (!nameUpdated) ops += nameOpForRaw(rawId, name)
-            for (p in draft.phones.map { it.trim() }.filter { it.isNotEmpty() }) {
+            for (p in draft.phones.filter { it.number.trim().isNotEmpty() }) {
                 ops += ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
                     .withValue(ContactsContract.Data.RAW_CONTACT_ID, rawId)
                     .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE)
-                    .withValue(ContactsContract.CommonDataKinds.Phone.NUMBER, p)
-                    .withValue(ContactsContract.CommonDataKinds.Phone.TYPE, ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE)
+                    .withValue(ContactsContract.CommonDataKinds.Phone.NUMBER, p.number.trim())
+                    .withValue(ContactsContract.CommonDataKinds.Phone.TYPE, p.type)
                     .build()
             }
-            for (e in draft.emails.map { it.trim() }.filter { it.isNotEmpty() }) {
+            for (e in draft.emails.filter { it.address.trim().isNotEmpty() }) {
                 ops += ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
                     .withValue(ContactsContract.Data.RAW_CONTACT_ID, rawId)
                     .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Email.CONTENT_ITEM_TYPE)
-                    .withValue(ContactsContract.CommonDataKinds.Email.ADDRESS, e)
-                    .withValue(ContactsContract.CommonDataKinds.Email.TYPE, ContactsContract.CommonDataKinds.Email.TYPE_OTHER)
+                    .withValue(ContactsContract.CommonDataKinds.Email.ADDRESS, e.address.trim())
+                    .withValue(ContactsContract.CommonDataKinds.Email.TYPE, e.type)
                     .build()
             }
-            if (draft.organization.isNotBlank()) {
+            if (draft.organization.isNotBlank() || draft.jobTitle.isNotBlank()) {
                 ops += ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
                     .withValue(ContactsContract.Data.RAW_CONTACT_ID, rawId)
                     .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Organization.CONTENT_ITEM_TYPE)
                     .withValue(ContactsContract.CommonDataKinds.Organization.COMPANY, draft.organization.trim())
+                    .withValue(ContactsContract.CommonDataKinds.Organization.TITLE, draft.jobTitle.trim())
                     .build()
             }
             if (draft.note.isNotBlank()) {
@@ -342,15 +348,20 @@ object ContactsRepo {
         if (group.size < 2 || !hasWritePermission(context)) return false
         val sorted = group.sortedByDescending { it.phones.size + it.emails.size }
         val keep = sorted.first()
-        val phones = (keep.phones.map { it.number } + sorted.drop(1).flatMap { it.phones.map { p -> p.number } })
-            .map { it.trim() }.filter { it.isNotEmpty() }.distinct()
-        val emails = (keep.emails.map { it.address } + sorted.drop(1).flatMap { it.emails.map { e -> e.address } })
-            .map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        // v1.5: keep the full entries (number + type) — the old merge
+        // flattened every type to Mobile/Other, same as the editor bug.
+        val phones = (keep.phones + sorted.drop(1).flatMap { it.phones })
+            .distinctBy { it.number.trim() }
+            .filter { it.number.trim().isNotEmpty() }
+        val emails = (keep.emails + sorted.drop(1).flatMap { it.emails })
+            .distinctBy { it.address.trim() }
+            .filter { it.address.trim().isNotEmpty() }
         val draft = ContactDraft(
             displayName = keep.displayName,
             phones = phones,
             emails = emails,
             organization = keep.organization ?: sorted.drop(1).firstNotNullOfOrNull { it.organization } ?: "",
+            jobTitle = keep.jobTitle ?: sorted.drop(1).firstNotNullOfOrNull { it.jobTitle } ?: "",
             note = keep.note ?: sorted.drop(1).firstNotNullOfOrNull { it.note } ?: ""
         )
         if (!updateContact(context, keep.contactId, draft)) return false
@@ -382,9 +393,19 @@ object ContactsRepo {
     fun importVCard(context: Context, text: String): Int {
         var created = 0
         for (vc in VCard.parse(text)) {
-            if (createContact(context, ContactDraft(vc.name, vc.phones, vc.emails, vc.org ?: "", vc.note ?: ""))) {
-                created++
-            }
+            val draft = ContactDraft(
+                displayName = vc.name,
+                phones = vc.phones.map {
+                    PhoneEntry(it, ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE, "Mobile")
+                },
+                emails = vc.emails.map {
+                    EmailEntry(it, ContactsContract.CommonDataKinds.Email.TYPE_OTHER, "Other")
+                },
+                organization = vc.org ?: "",
+                jobTitle = "",
+                note = vc.note ?: ""
+            )
+            if (createContact(context, draft)) created++
         }
         return created
     }

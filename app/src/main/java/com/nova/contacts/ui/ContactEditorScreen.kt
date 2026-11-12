@@ -1,5 +1,6 @@
 package com.nova.contacts.ui
 
+import android.provider.ContactsContract
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -13,8 +14,27 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.nova.contacts.data.ContactDraft
 import com.nova.contacts.data.ContactsRepo
+import com.nova.contacts.data.EmailEntry
 import com.nova.contacts.data.FullContact
+import com.nova.contacts.data.PhoneEntry
 import kotlinx.coroutines.launch
+
+private val PHONE_TYPES = listOf(
+    ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE to "Mobile",
+    ContactsContract.CommonDataKinds.Phone.TYPE_HOME to "Home",
+    ContactsContract.CommonDataKinds.Phone.TYPE_WORK to "Work",
+    ContactsContract.CommonDataKinds.Phone.TYPE_MAIN to "Main",
+    ContactsContract.CommonDataKinds.Phone.TYPE_FAX_WORK to "Fax (work)",
+    ContactsContract.CommonDataKinds.Phone.TYPE_FAX_HOME to "Fax (home)",
+    ContactsContract.CommonDataKinds.Phone.TYPE_OTHER to "Other"
+)
+
+private val EMAIL_TYPES = listOf(
+    ContactsContract.CommonDataKinds.Email.TYPE_OTHER to "Other",
+    ContactsContract.CommonDataKinds.Email.TYPE_HOME to "Home",
+    ContactsContract.CommonDataKinds.Email.TYPE_WORK to "Work",
+    ContactsContract.CommonDataKinds.Email.TYPE_MOBILE to "Mobile"
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -27,13 +47,19 @@ fun ContactEditorScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var name by remember(contact) { mutableStateOf(contact?.displayName ?: "") }
+    // v1.5: the editor keeps the full entries (number + type), not just the
+    // strings — the old editor rewrote every number to Mobile and every
+    // email to Other on every save.
     var phones by remember(contact) {
-        mutableStateOf(contact?.phones?.map { it.number }?.toMutableList() ?: mutableListOf(""))
+        mutableStateOf(contact?.phones?.toMutableList() ?: mutableListOf(PhoneEntry("")))
     }
     var emails by remember(contact) {
-        mutableStateOf(contact?.emails?.map { it.address }?.toMutableList() ?: mutableListOf(""))
+        mutableStateOf(contact?.emails?.toMutableList() ?: mutableListOf(EmailEntry("")))
     }
     var organization by remember(contact) { mutableStateOf(contact?.organization ?: "") }
+    // v1.5: job title is its own field — the old code merged it into the
+    // company name ("Acme Corp — Manager") and corrupted it on every edit.
+    var jobTitle by remember(contact) { mutableStateOf(contact?.jobTitle ?: "") }
     var note by remember(contact) { mutableStateOf(contact?.note ?: "") }
     var saving by remember { mutableStateOf(false) }
     val isEdit = contact != null
@@ -53,6 +79,7 @@ fun ContactEditorScreen(
                                 phones = phones,
                                 emails = emails,
                                 organization = organization,
+                                jobTitle = jobTitle,
                                 note = note
                             )
                             scope.launch {
@@ -90,10 +117,19 @@ fun ContactEditorScreen(
             phones.forEachIndexed { i, p ->
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
-                        value = p, onValueChange = { value -> phones = phones.toMutableList().also { it[i] = value } },
+                        value = p.number, onValueChange = { value ->
+                            phones = phones.toMutableList().also { it[i] = p.copy(number = value) }
+                        },
                         label = { Text("Phone ${i + 1}") },
                         singleLine = true,
                         modifier = Modifier.weight(1f)
+                    )
+                    TypePicker(
+                        label = p.typeLabel,
+                        options = PHONE_TYPES,
+                        onPick = { type, label ->
+                            phones = phones.toMutableList().also { it[i] = p.copy(type = type, typeLabel = label) }
+                        }
                     )
                     if (phones.size > 1) {
                         IconButton(onClick = { phones = phones.toMutableList().also { it.removeAt(i) } }) {
@@ -102,7 +138,11 @@ fun ContactEditorScreen(
                     }
                 }
             }
-            OutlinedButton(onClick = { phones = phones.toMutableList().also { it.add("") } }) {
+            OutlinedButton(onClick = {
+                phones = phones.toMutableList().also {
+                    it.add(PhoneEntry("", ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE, "Mobile"))
+                }
+            }) {
                 Icon(Icons.Filled.Add, null)
                 Spacer(Modifier.width(4.dp))
                 Text("Add phone")
@@ -111,10 +151,19 @@ fun ContactEditorScreen(
             emails.forEachIndexed { i, e ->
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
-                        value = e, onValueChange = { value -> emails = emails.toMutableList().also { it[i] = value } },
+                        value = e.address, onValueChange = { value ->
+                            emails = emails.toMutableList().also { it[i] = e.copy(address = value) }
+                        },
                         label = { Text("Email ${i + 1}") },
                         singleLine = true,
                         modifier = Modifier.weight(1f)
+                    )
+                    TypePicker(
+                        label = e.typeLabel,
+                        options = EMAIL_TYPES,
+                        onPick = { type, label ->
+                            emails = emails.toMutableList().also { it[i] = e.copy(type = type, typeLabel = label) }
+                        }
                     )
                     if (emails.size > 1) {
                         IconButton(onClick = { emails = emails.toMutableList().also { it.removeAt(i) } }) {
@@ -123,7 +172,11 @@ fun ContactEditorScreen(
                     }
                 }
             }
-            OutlinedButton(onClick = { emails = emails.toMutableList().also { it.add("") } }) {
+            OutlinedButton(onClick = {
+                emails = emails.toMutableList().also {
+                    it.add(EmailEntry("", ContactsContract.CommonDataKinds.Email.TYPE_OTHER, "Other"))
+                }
+            }) {
                 Icon(Icons.Filled.Add, null)
                 Spacer(Modifier.width(4.dp))
                 Text("Add email")
@@ -135,10 +188,37 @@ fun ContactEditorScreen(
                 modifier = Modifier.fillMaxWidth()
             )
             OutlinedTextField(
+                value = jobTitle, onValueChange = { jobTitle = it },
+                label = { Text("Job title") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
                 value = note, onValueChange = { note = it },
                 label = { Text("Note") },
                 modifier = Modifier.fillMaxWidth().height(96.dp)
             )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TypePicker(
+    label: String,
+    options: List<Pair<Int, String>>,
+    onPick: (Int, String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(onClick = { expanded = true }) { Text(label) }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { (type, text) ->
+                DropdownMenuItem(
+                    text = { Text(text) },
+                    onClick = { onPick(type, text); expanded = false }
+                )
+            }
         }
     }
 }
