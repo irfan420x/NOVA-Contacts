@@ -2,17 +2,22 @@ package com.nova.contacts.data
 
 /** A phone number with its provider type (Mobile/Home/Work/…) — the type is
  *  part of the data and must survive an edit (v1.5: the old editor rewrote
- *  every number to Mobile and every email to Other on every save). */
+ *  every number to Mobile and every email to Other on every save).
+ *  v1.6: customLabel is the user text for TYPE_CUSTOM ("Assistant", "Car")
+ *  — it is stored in DATA3 and must be written back, or the label is lost
+ *  and the number shows as "Other" after one edit. */
 data class PhoneEntry(
     val number: String,
     val type: Int = android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE,
-    val typeLabel: String = "Mobile"
+    val typeLabel: String = "Mobile",
+    val customLabel: String? = null
 )
 
 data class EmailEntry(
     val address: String,
     val type: Int = android.provider.ContactsContract.CommonDataKinds.Email.TYPE_OTHER,
-    val typeLabel: String = "Other"
+    val typeLabel: String = "Other",
+    val customLabel: String? = null
 )
 
 /** One person, with every field the app manages. */

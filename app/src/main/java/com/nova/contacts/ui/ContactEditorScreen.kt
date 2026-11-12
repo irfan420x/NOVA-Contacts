@@ -26,14 +26,17 @@ private val PHONE_TYPES = listOf(
     ContactsContract.CommonDataKinds.Phone.TYPE_MAIN to "Main",
     ContactsContract.CommonDataKinds.Phone.TYPE_FAX_WORK to "Fax (work)",
     ContactsContract.CommonDataKinds.Phone.TYPE_FAX_HOME to "Fax (home)",
-    ContactsContract.CommonDataKinds.Phone.TYPE_OTHER to "Other"
+    ContactsContract.CommonDataKinds.Phone.TYPE_OTHER to "Other",
+    // v1.6: Custom — the label is typed in the field that appears below.
+    ContactsContract.CommonDataKinds.Phone.TYPE_CUSTOM to "Custom"
 )
 
 private val EMAIL_TYPES = listOf(
     ContactsContract.CommonDataKinds.Email.TYPE_OTHER to "Other",
     ContactsContract.CommonDataKinds.Email.TYPE_HOME to "Home",
     ContactsContract.CommonDataKinds.Email.TYPE_WORK to "Work",
-    ContactsContract.CommonDataKinds.Email.TYPE_MOBILE to "Mobile"
+    ContactsContract.CommonDataKinds.Email.TYPE_MOBILE to "Mobile",
+    ContactsContract.CommonDataKinds.Email.TYPE_CUSTOM to "Custom"
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -125,10 +128,18 @@ fun ContactEditorScreen(
                         modifier = Modifier.weight(1f)
                     )
                     TypePicker(
-                        label = p.typeLabel,
+                        label = if (p.type == ContactsContract.CommonDataKinds.Phone.TYPE_CUSTOM) {
+                            p.customLabel?.takeIf { it.isNotBlank() } ?: "Custom"
+                        } else p.typeLabel,
                         options = PHONE_TYPES,
                         onPick = { type, label ->
-                            phones = phones.toMutableList().also { it[i] = p.copy(type = type, typeLabel = label) }
+                            phones = phones.toMutableList().also {
+                                it[i] = if (type == ContactsContract.CommonDataKinds.Phone.TYPE_CUSTOM) {
+                                    p.copy(type = type, typeLabel = "Custom", customLabel = p.customLabel ?: "")
+                                } else {
+                                    p.copy(type = type, typeLabel = label, customLabel = null)
+                                }
+                            }
                         }
                     )
                     if (phones.size > 1) {
@@ -136,6 +147,18 @@ fun ContactEditorScreen(
                             Icon(Icons.Filled.RemoveCircle, "Remove phone")
                         }
                     }
+                }
+                // v1.6: a custom type needs its label typed out, or the
+                // label is lost and the number shows as "Other" after save.
+                if (p.type == ContactsContract.CommonDataKinds.Phone.TYPE_CUSTOM) {
+                    OutlinedTextField(
+                        value = p.customLabel ?: "", onValueChange = { value ->
+                            phones = phones.toMutableList().also { it[i] = p.copy(customLabel = value, typeLabel = value.ifBlank { "Custom" }) }
+                        },
+                        label = { Text("Custom label (e.g. Assistant)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
             }
             OutlinedButton(onClick = {
@@ -159,10 +182,18 @@ fun ContactEditorScreen(
                         modifier = Modifier.weight(1f)
                     )
                     TypePicker(
-                        label = e.typeLabel,
+                        label = if (e.type == ContactsContract.CommonDataKinds.Email.TYPE_CUSTOM) {
+                            e.customLabel?.takeIf { it.isNotBlank() } ?: "Custom"
+                        } else e.typeLabel,
                         options = EMAIL_TYPES,
                         onPick = { type, label ->
-                            emails = emails.toMutableList().also { it[i] = e.copy(type = type, typeLabel = label) }
+                            emails = emails.toMutableList().also {
+                                it[i] = if (type == ContactsContract.CommonDataKinds.Email.TYPE_CUSTOM) {
+                                    e.copy(type = type, typeLabel = "Custom", customLabel = e.customLabel ?: "")
+                                } else {
+                                    e.copy(type = type, typeLabel = label, customLabel = null)
+                                }
+                            }
                         }
                     )
                     if (emails.size > 1) {
@@ -170,6 +201,16 @@ fun ContactEditorScreen(
                             Icon(Icons.Filled.RemoveCircle, "Remove email")
                         }
                     }
+                }
+                if (e.type == ContactsContract.CommonDataKinds.Email.TYPE_CUSTOM) {
+                    OutlinedTextField(
+                        value = e.customLabel ?: "", onValueChange = { value ->
+                            emails = emails.toMutableList().also { it[i] = e.copy(customLabel = value, typeLabel = value.ifBlank { "Custom" }) }
+                        },
+                        label = { Text("Custom label") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
             }
             OutlinedButton(onClick = {

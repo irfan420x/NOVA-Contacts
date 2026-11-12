@@ -100,6 +100,12 @@ fun ContactDetailScreen(
                 Spacer(Modifier.height(4.dp))
                 Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            // v1.6: the job title is shown here — it was stored by the
+            // editor but invisible everywhere except the editor itself.
+            contact.jobTitle?.takeIf { t -> t.isNotBlank() }?.let {
+                Spacer(Modifier.height(4.dp))
+                Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             if (contact.timesContacted > 0) {
                 Spacer(Modifier.height(4.dp))
                 Text("${contact.timesContacted} calls", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
@@ -123,7 +129,9 @@ fun ContactDetailScreen(
                         Text("Call")
                     }
                     FilledTonalButton(onClick = {
-                        val intent = Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:$firstPhone"))
+                        // v1.6: Uri.fromParts keeps # intact — Uri.parse
+                        // treats # as a fragment delimiter and truncates.
+                        val intent = Intent(Intent.ACTION_SENDTO, Uri.fromParts("smsto", firstPhone, null))
                         try { context.startActivity(intent) } catch (e: Exception) {
                             ErrorLog.log(context, "Detail", "Failed to open messaging", e)
                             onStatus("Couldn't open messages")

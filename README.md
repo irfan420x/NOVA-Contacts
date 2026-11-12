@@ -51,6 +51,14 @@ Minimum SDK 29 (Android 10), target SDK 35.
 
 ## Version history
 
+- **v1.6** — Second-audit fixes: search now matches a number in any form
+  (+880… / 017… / plain — both sides are normalized before comparing);
+  custom phone/email type labels ("Assistant", "Car") survive an edit (the
+  label is written to DATA3 and the editor has a Custom type with a label
+  field); the job title is shown in the detail screen and survives a
+  backup/restore (vCard TITLE round-trips); vCard import strips a leading
+  UTF-8 BOM so Outlook/Windows files parse; the Message button uses
+  `Uri.fromParts` so `#` can't truncate the number.
 - **v1.5** — Audit bug fixes: the editor no longer corrupts a contact's job
   title into the company name (company and title are now separate fields),
   and phone/email types are no longer flattened to Mobile/Other on every

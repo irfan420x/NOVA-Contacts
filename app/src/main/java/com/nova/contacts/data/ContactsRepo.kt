@@ -160,13 +160,13 @@ object ContactsRepo {
                             val type = c.getInt(d2I)
                             val label = c.getString(d3I)
                             phones.getOrPut(id) { mutableListOf() } +=
-                                PhoneEntry(value, type, phoneTypeLabel(type, label))
+                                PhoneEntry(value, type, phoneTypeLabel(type, label), label)
                         }
                         ContactsContract.CommonDataKinds.Email.CONTENT_ITEM_TYPE -> {
                             val type = c.getInt(d2I)
                             val label = c.getString(d3I)
                             emails.getOrPut(id) { mutableListOf() } +=
-                                EmailEntry(value, type, emailTypeLabel(type, label))
+                                EmailEntry(value, type, emailTypeLabel(type, label), label)
                         }
                         ContactsContract.CommonDataKinds.Organization.CONTENT_ITEM_TYPE -> {
                             // v1.5: company and title are separate fields —
@@ -220,6 +220,9 @@ object ContactsRepo {
                     .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE)
                     .withValue(ContactsContract.CommonDataKinds.Phone.NUMBER, p.number.trim())
                     .withValue(ContactsContract.CommonDataKinds.Phone.TYPE, p.type)
+                    // v1.6: write the custom label (DATA3) — without it a
+                    // TYPE_CUSTOM number reloads as "Other".
+                    .withValue(ContactsContract.CommonDataKinds.Phone.LABEL, p.customLabel)
                     .build()
             }
             for (e in draft.emails.filter { it.address.trim().isNotEmpty() }) {
@@ -228,6 +231,7 @@ object ContactsRepo {
                     .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Email.CONTENT_ITEM_TYPE)
                     .withValue(ContactsContract.CommonDataKinds.Email.ADDRESS, e.address.trim())
                     .withValue(ContactsContract.CommonDataKinds.Email.TYPE, e.type)
+                    .withValue(ContactsContract.CommonDataKinds.Email.LABEL, e.customLabel)
                     .build()
             }
             if (draft.organization.isNotBlank() || draft.jobTitle.isNotBlank()) {
@@ -286,6 +290,7 @@ object ContactsRepo {
                     .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE)
                     .withValue(ContactsContract.CommonDataKinds.Phone.NUMBER, p.number.trim())
                     .withValue(ContactsContract.CommonDataKinds.Phone.TYPE, p.type)
+                    .withValue(ContactsContract.CommonDataKinds.Phone.LABEL, p.customLabel)
                     .build()
             }
             for (e in draft.emails.filter { it.address.trim().isNotEmpty() }) {
@@ -294,6 +299,7 @@ object ContactsRepo {
                     .withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Email.CONTENT_ITEM_TYPE)
                     .withValue(ContactsContract.CommonDataKinds.Email.ADDRESS, e.address.trim())
                     .withValue(ContactsContract.CommonDataKinds.Email.TYPE, e.type)
+                    .withValue(ContactsContract.CommonDataKinds.Email.LABEL, e.customLabel)
                     .build()
             }
             if (draft.organization.isNotBlank() || draft.jobTitle.isNotBlank()) {
@@ -383,6 +389,7 @@ object ContactsRepo {
                 phones = c.phones.map { it.number },
                 emails = c.emails.map { it.address },
                 org = c.organization,
+                jobTitle = c.jobTitle,
                 note = c.note
             )
         }
@@ -402,7 +409,7 @@ object ContactsRepo {
                     EmailEntry(it, ContactsContract.CommonDataKinds.Email.TYPE_OTHER, "Other")
                 },
                 organization = vc.org ?: "",
-                jobTitle = "",
+                jobTitle = vc.jobTitle ?: "",
                 note = vc.note ?: ""
             )
             if (createContact(context, draft)) created++

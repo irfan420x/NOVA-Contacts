@@ -42,13 +42,35 @@ object ContactUtils {
     }
 
     /** True when the query matches the contact (name, or a number/T9 prefix). */
+    /**
+     * Normalize a dialed/stored number for search comparison: +8801712…,
+     * 01712… and 8801712… all become "1712…". (Bangladesh country code 880.)
+     * Stripping is unconditional — a length guard broke progressive
+     * matching (same regression the Dialer had in v1.6, fixed in v1.7).
+     * Different from normalizeNumber (last-10, used for duplicates).
+     */
+    fun normalizeForMatch(digits: String): String {
+        val d = digits.removePrefix("+")
+        return when {
+            d.startsWith("880") -> d.removePrefix("880")
+            d.startsWith("0") -> d.removePrefix("0")
+            else -> d
+        }
+    }
+
     fun matchesQuery(contact: FullContact, query: String): Boolean {
         val q = query.trim()
         if (q.isEmpty()) return true
         if (contact.displayName.contains(q, ignoreCase = true)) return true
         val digits = digitsOnly(q)
         if (digits.isNotEmpty()) {
-            if (contact.phones.any { digitsOnly(it.number).contains(digits) }) return true
+            // v1.6: normalize both sides before comparing — a stored
+            // 017… number must match a typed +880… query and vice versa
+            // (the old raw contains() missed most form combinations).
+            val qNorm = normalizeForMatch(digits)
+            if (qNorm.length >= 2 && contact.phones.any {
+                    normalizeForMatch(digitsOnly(it.number)).contains(qNorm)
+                }) return true
             // T9: the typed digits are a prefix of some word of the name.
             if (digits.length >= 2 && digits.all { it.isDigit() }) {
                 val t9 = mapOf(

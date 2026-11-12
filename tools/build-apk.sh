@@ -4,11 +4,11 @@
 # Reuses the NOVA Files toolchain (JDK, kotlinc, SDK) and its vendored
 # dependency jars/AARs — Contacts needs the same Compose + AndroidX set.
 set -e
-# Portable paths: the repo can be checked out anywhere, not only
-# $HOME/workspace/nova-contacts. SCRIPT_DIR is tools/; ROOT is its parent.
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Portable paths: resolve the project root from this script's location so
+# the script works from any checkout, not just ~/workspace/nova-contacts.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-if [ -n "$NOVA_FILES_ROOT" ]; then
+if [ -n "${NOVA_FILES_ROOT:-}" ]; then
     FILES_ROOT="$NOVA_FILES_ROOT"
 elif [ -d "$ROOT/../nova-files" ]; then
     FILES_ROOT="$ROOT/../nova-files"
@@ -53,7 +53,7 @@ echo "== 2. aapt2 link =="
 LINK_ARGS=(-I "$ANDROID_JAR" --manifest "$SRC/AndroidManifest.xml"
     --auto-add-overlay --java "$BUILD/gen"
     --min-sdk-version 29 --target-sdk-version 35
-    --version-code 6 --version-name 1.5
+    --version-code 7 --version-name 1.6
     -o "$BUILD/apk/app-unsigned.apk")
 while read -r pkg resdir; do
     LINK_ARGS+=(--extra-packages "$pkg")

@@ -15,6 +15,7 @@ object VCard {
         val phones: List<String> = emptyList(),
         val emails: List<String> = emptyList(),
         val org: String? = null,
+        val jobTitle: String? = null,
         val note: String? = null
     )
 
@@ -52,6 +53,8 @@ object VCard {
             for (p in c.phones) append("TEL;TYPE=CELL:${escape(p)}\r\n")
             for (e in c.emails) append("EMAIL:${escape(e)}\r\n")
             c.org?.takeIf { it.isNotBlank() }?.let { append("ORG:${escape(it)}\r\n") }
+            // v1.6: job title survives backup/restore (was silently dropped).
+            c.jobTitle?.takeIf { it.isNotBlank() }?.let { append("TITLE:${escape(it)}\r\n") }
             c.note?.takeIf { it.isNotBlank() }?.let { append("NOTE:${escape(it)}\r\n") }
             append("END:VCARD\r\n")
         }
@@ -63,9 +66,13 @@ object VCard {
      * so cards from other apps import cleanly.
      */
     fun parse(text: String): List<VCardContact> {
+        // v1.6: strip a leading UTF-8 BOM — files from Outlook/Windows/
+        // Samsung commonly carry one, and it made the first line
+        // "\uFEFFBEGIN:VCARD" so the whole file parsed to 0 contacts.
+        val clean = text.removePrefix("\uFEFF")
         // Unfold: a folded line starts with a space or tab.
         val logical = mutableListOf<String>()
-        for (raw in text.split(Regex("\r\n|\n|\r"))) {
+        for (raw in clean.split(Regex("\r\n|\n|\r"))) {
             if (raw.isEmpty()) continue
             if ((raw.startsWith(" ") || raw.startsWith("\t")) && logical.isNotEmpty()) {
                 logical[logical.lastIndex] = logical.last() + raw.drop(1)
@@ -78,13 +85,14 @@ object VCard {
         var phones = mutableListOf<String>()
         var emails = mutableListOf<String>()
         var org: String? = null
+        var jobTitle: String? = null
         var note: String? = null
         var inCard = false
         fun flush() {
             if (inCard && (name.isNotBlank() || phones.isNotEmpty())) {
-                out += VCardContact(name, phones.toList(), emails.toList(), org, note)
+                out += VCardContact(name, phones.toList(), emails.toList(), org, jobTitle, note)
             }
-            name = ""; phones = mutableListOf(); emails = mutableListOf(); org = null; note = null
+            name = ""; phones = mutableListOf(); emails = mutableListOf(); org = null; jobTitle = null; note = null
         }
         for (line in logical) {
             val upper = line.uppercase()
@@ -102,6 +110,7 @@ object VCard {
                         "TEL" -> if (value.isNotBlank()) phones += value
                         "EMAIL" -> if (value.isNotBlank()) emails += value
                         "ORG" -> org = value
+                        "TITLE" -> jobTitle = value
                         "NOTE" -> note = value
                     }
                 }
