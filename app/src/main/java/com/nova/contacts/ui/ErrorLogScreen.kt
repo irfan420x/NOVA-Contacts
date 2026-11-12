@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -74,11 +75,17 @@ fun ErrorLogScreen(onBack: () -> Unit) {
             }
             Spacer(Modifier.height(12.dp))
             if (entries.isEmpty()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("No errors recorded.") }
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        NebulaEmptyIcon(Icons.Filled.CheckCircle, null)
+                        Spacer(Modifier.height(16.dp))
+                        Text("No errors recorded.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
             } else {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(entries) { e ->
-                        Card(Modifier.fillMaxWidth()) {
+                        NebulaCard(Modifier.fillMaxWidth()) {
                             Text(e, Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
                         }
                     }

@@ -51,6 +51,12 @@ Minimum SDK 29 (Android 10), target SDK 35.
 
 ## Version history
 
+- **v1.8** — Nebula Dark Premium style: dark-first space theme (deep navy
+  background, violet primary, violet-to-blue gradient FABs and buttons,
+  cyan secondary, pink favorites), 20dp cards with 1dp outline borders,
+  gradient-tinted empty-state icons; the light theme is kept, restyled
+  with soft surfaces and the same violet primary. Style only — no
+  behavior, navigation, permission, or data changes.
 - **v1.7** — Final audit: duplicate detection no longer equates different
   numbers (the last-10-digits rule grouped `0171234567` with
   `10171234567`); merge now carries the loser's photo, birthday, groups,

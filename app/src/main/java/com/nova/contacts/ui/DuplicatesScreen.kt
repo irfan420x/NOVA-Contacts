@@ -5,6 +5,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CopyAll
 import androidx.compose.material.icons.filled.Merge
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -57,7 +59,7 @@ fun DuplicatesScreen(onBack: () -> Unit, onStatus: (String) -> Unit) {
             Spacer(Modifier.height(16.dp))
             // v1.4: merge every duplicate group in one tap.
             if (groups.isNotEmpty()) {
-                Button(
+                NebulaButton(
                     onClick = { confirmMergeAll = true },
                     enabled = merging == null && !mergingAll,
                     modifier = Modifier.fillMaxWidth()
@@ -70,7 +72,13 @@ fun DuplicatesScreen(onBack: () -> Unit, onStatus: (String) -> Unit) {
             }
             when {
                 !ContactsRepo.hasContactsPermission(context) -> {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(
+                        Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        NebulaEmptyIcon(Icons.Filled.CopyAll, null)
+                        Spacer(Modifier.height(16.dp))
                         Text(
                             "Contacts permission is needed to find duplicates.",
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -79,7 +87,11 @@ fun DuplicatesScreen(onBack: () -> Unit, onStatus: (String) -> Unit) {
                 }
                 loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
                 groups.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("No duplicates found.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        NebulaEmptyIcon(Icons.Filled.CheckCircle, null)
+                        Spacer(Modifier.height(16.dp))
+                        Text("No duplicates found.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
                 else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     // v1.7: keyed by the shared number — the old key
@@ -87,7 +99,7 @@ fun DuplicatesScreen(onBack: () -> Unit, onStatus: (String) -> Unit) {
                     // first() in two groups.
                     items(groups, key = { it.number }) { group ->
                         val members = group.contacts
-                        Card(Modifier.fillMaxWidth()) {
+                        NebulaCard(Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(16.dp)) {
                                 members.forEach { c ->
                                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -105,11 +117,11 @@ fun DuplicatesScreen(onBack: () -> Unit, onStatus: (String) -> Unit) {
                                     }
                                     Spacer(Modifier.height(8.dp))
                                 }
-                                Button(
+                                NebulaButton(
                                     onClick = {
                                         if (!ContactsRepo.hasWritePermission(context)) {
                                             onStatus("Write permission is off — allow it to merge contacts")
-                                            return@Button
+                                            return@NebulaButton
                                         }
                                         merging = group
                                         scope.launch {

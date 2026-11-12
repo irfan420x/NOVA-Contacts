@@ -299,7 +299,7 @@ fun NovaContactsApp() {
                                 )
                             },
                             floatingActionButton = {
-                                FloatingActionButton(onClick = {
+                                NebulaFab(onClick = {
                                     // v1.7: don't open the editor to a dead
                                     // end when writing is not allowed.
                                     if (!writeGranted) {
@@ -373,20 +373,28 @@ private fun ContactList(
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                NebulaEmptyIcon(Icons.Filled.Contacts, null)
+                Spacer(Modifier.height(16.dp))
                 Text(
                     "Contacts need permission to show your contacts.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(16.dp))
-                Button(onClick = onRequestPermission) { Text("Allow access") }
+                NebulaButton(onClick = onRequestPermission) { Text("Allow access") }
             }
         }
         loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
         filtered.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(
-                if (searching) "No contacts match \"$query\"" else "No contacts yet — tap + to add one",
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                NebulaEmptyIcon(
+                    if (searching) Icons.Filled.Search else Icons.Filled.PersonAdd, null
+                )
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    if (searching) "No contacts match \"$query\"" else "No contacts yet — tap + to add one",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
         else -> {
             // Group by first letter for section headers.
@@ -446,11 +454,15 @@ private fun ContactList(
                             trailingContent = {
                                 if (c.starred) Icon(
                                     Icons.Filled.Star, "Favorite",
-                                    tint = MaterialTheme.colorScheme.primary,
+                                    tint = MaterialTheme.colorScheme.tertiary,
                                     modifier = Modifier.size(20.dp)
                                 )
                             },
                             modifier = Modifier.clickable { onOpen(c) }
+                        )
+                        HorizontalDivider(
+                            color = MaterialTheme.colorScheme.outlineVariant,
+                            thickness = 1.dp
                         )
                     }
                 }
@@ -473,7 +485,7 @@ fun ContactPhoto(c: FullContact, sizeDp: Int) {
     } else {
         Box(
             Modifier.size(sizeDp.dp).clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primary),
+                .background(NebulaGradient),
             contentAlignment = Alignment.Center
         ) {
             Text(
@@ -492,7 +504,7 @@ private fun PermissionScreen(onGrant: () -> Unit, onSkip: () -> Unit) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Icon(Icons.Filled.Contacts, null, Modifier.size(72.dp), tint = MaterialTheme.colorScheme.primary)
+        NebulaEmptyIcon(Icons.Filled.Contacts, null)
         Spacer(Modifier.height(16.dp))
         Text("NOVA Contacts", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
@@ -502,7 +514,7 @@ private fun PermissionScreen(onGrant: () -> Unit, onSkip: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Spacer(Modifier.height(24.dp))
-        Button(onClick = onGrant, Modifier.fillMaxWidth()) { Text("Allow access") }
+        NebulaButton(onClick = onGrant, Modifier.fillMaxWidth()) { Text("Allow access") }
         Spacer(Modifier.height(12.dp))
         OutlinedButton(onClick = onSkip, Modifier.fillMaxWidth()) { Text("Continue without it") }
     }

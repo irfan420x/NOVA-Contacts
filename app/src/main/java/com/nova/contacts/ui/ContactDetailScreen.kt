@@ -100,7 +100,7 @@ fun ContactDetailScreen(
                         Icon(
                             if (starred) Icons.Filled.Star else Icons.Filled.StarBorder,
                             if (starred) "Remove from favorites" else "Add to favorites",
-                            tint = if (starred) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            tint = if (starred) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                     IconButton(onClick = {
